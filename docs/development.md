@@ -1,0 +1,89 @@
+# 开发环境与多 Chat 工作流
+
+## 1. 工具基线
+
+后续应用脚手架的目标环境：
+
+| 区域 | 基线 |
+| --- | --- |
+| frontend | Node.js 20、pnpm 11、React 19、Vite 7、TypeScript |
+| backend | Java 21、Spring Boot 4、Maven Wrapper |
+| agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
+| infrastructure | Docker Compose；Phase 0 不要求启动 |
+
+仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
+
+## 2. 当前基线
+
+本阶段没有应用依赖、构建命令或运行服务。不要为“测试目录存在”而安装 Node、Maven、Python 包或 Docker。
+
+可以执行的仓库级检查：
+
+```powershell
+git status --short --branch
+git diff --check
+git ls-files
+git check-ignore -v --no-index .env .private/example.pdf agent/storage/example.db frontend/node_modules/example.js
+```
+
+`.env.example` 应保持可提交；`.env`、私有数据、PDF、数据库、向量、模型和日志必须被忽略。
+
+## 3. 多 Chat 原则
+
+Codex 从仓库根到当前目录叠加 `AGENTS.md`，越接近工作目录的规则越具体。每个 Chat 应从目标目录的边界开始工作，并遵守根规则和最近的子目录规则。
+
+并行任务必须使用独立 Worktree：
+
+1. 确认需要作为基线的更改已经提交到 `main`。
+2. 在 Codex 新 Chat 中选择 Worktree，并以最新 `main` 为起点。
+3. Prompt 明确写出目标、允许修改的路径、禁止修改的共享路径和验收命令。
+4. 一个 Chat 只处理一个边界明确的任务；不要在同一任务顺手修改另一个应用。
+5. 在 Worktree 内完成检查、提交或交接；不要依赖另一个 Chat 的未提交文件。
+6. 合入后，后续 Chat 必须从更新后的 `main` 新建或显式同步。
+
+本仓库不创建 `.worktreeinclude`，因此被忽略的 `.env` 和本地凭据不会作为项目配置被复制。未来每个 Worktree 应从对应 `.env.example` 独立配置本地环境。
+
+## 4. 任务所有权
+
+每个 Chat 的 Prompt 至少包含：
+
+```text
+目标：
+允许修改：
+禁止修改：
+依赖的提交或契约版本：
+必须运行的检查：
+完成定义：
+```
+
+共享路径包括：
+
+- `contracts/**`
+- 根级配置和 `AGENTS.md`
+- 跨应用开发脚本
+- GitHub Actions 公共工作流
+
+未明确获得共享路径所有权的 Chat 不得修改这些文件。
+
+## 5. 契约先行顺序
+
+任何跨进程接口按以下顺序推进：
+
+1. 独立 contracts Chat 修改 OpenAPI、Schema、说明和示例并完成校验。
+2. 合入 `main`，记录契约版本或提交 SHA。
+3. Agent、backend、frontend Chat 从该版本分别实现。
+4. 集成 Chat 只处理跨端验证与必要的小型修复，不重新设计契约。
+
+若实现发现契约问题，停止在该边界，返回 contracts 任务修订；不得由实现 Chat 私自改变 wire shape。
+
+## 6. 提交与交接
+
+- 分支和提交信息使用英文，文档使用中文。
+- 提交前运行目标目录 `AGENTS.md` 指定的检查和 `git diff --check`。
+- 交接说明列出变更、验证结果、未运行检查和兼容性影响。
+- 不提交其他 Chat 的工作，不重写已共享分支历史，不在未授权任务中推送或更改 GitHub 设置。
+
+官方参考：
+
+- [OpenAI Docs：AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+- [OpenAI Docs：Git Worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees)
