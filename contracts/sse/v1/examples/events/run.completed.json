@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "type": "run.completed",
+  "eventId": "evt-demo-004",
+  "requestId": "req-demo-001",
+  "runId": "run-demo-001",
+  "conversationId": "conv-demo-001",
+  "assistantMessageId": "msg-assistant-demo-001",
+  "sequence": 3,
+  "timestamp": "2026-01-01T00:00:03Z",
+  "payload": {}
+}

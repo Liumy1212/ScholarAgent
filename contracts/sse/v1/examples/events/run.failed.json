@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "type": "run.failed",
+  "eventId": "evt-failed-002",
+  "requestId": "req-failed-001",
+  "runId": "run-failed-001",
+  "conversationId": "conv-demo-002",
+  "assistantMessageId": "msg-assistant-demo-002",
+  "sequence": 1,
+  "timestamp": "2026-01-01T00:01:01Z",
+  "payload": {
+    "code": "PROVIDER_FAILURE",
+    "message": "Synthetic provider failure for contract validation.",
+    "retryable": true
+  }
+}

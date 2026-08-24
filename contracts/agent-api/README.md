@@ -1,3 +1,9 @@
 # Agent API contracts
 
-此目录将保存 Python Agent 的 `/agent-api/v1/**` OpenAPI、SSE Schema、说明与合法示例。当前尚未发布任何机器可读契约。
+`agent-openapi-v1.yaml` 定义 Python Agent 由 Java BFF 消费的 Phase 0 API：
+
+```text
+POST /agent-api/v1/conversations/{conversationId}/messages/stream
+```
+
+Java 调用 Agent 时必须传入 `X-Request-Id`。成功响应使用共享 SSE v1 契约；建流前非 2xx 响应使用共享 `StreamOpenError`，两者都不使用 Java `Result<T>`。

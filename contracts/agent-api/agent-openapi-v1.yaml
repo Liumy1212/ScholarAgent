@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: AIResearcher Agent API
+  version: 1.0.0
+  description: >-
+    Python Agent 向 Java BFF 暴露的 Phase 0 最小流式问答契约。Java 是本 API
+    的唯一调用方。
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+servers:
+  - url: /
+    description: Agent 服务根地址
+externalDocs:
+  description: SSE v1 线协议与生命周期规则
+  url: ../sse/v1/README.md
+paths:
+  /agent-api/v1/conversations/{conversationId}/messages/stream:
+    post:
+      operationId: streamAgentConversationMessage
+      summary: 流式生成助手消息
+      description: >-
+        Java 必须传入有效的 X-Request-Id。HTTP 200 表示流已建立；建流前的任意
+        非 2xx 响应使用 StreamOpenError。建流后的错误只能通过终止事件
+        run.failed 表达。
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/RequiredRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatStreamRequest'
+            examples:
+              defaultKnowledgeBase:
+                summary: 空 paperIds 使用默认全库
+                value:
+                  content: 请概括知识库中的主要观点。
+                  paperIds: []
+              selectedPapers:
+                summary: 仅检索指定论文
+                value:
+                  content: 比较这两篇论文的方法。
+                  paperIds:
+                    - paper-demo-001
+                    - paper-demo-002
+      responses:
+        '200':
+          $ref: '#/components/responses/SseStream'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        default:
+          $ref: '#/components/responses/UnexpectedOpenError'
+      x-sse-event-schema:
+        $ref: '#/components/schemas/SseEvent'
+      x-sse-contract: ../sse/v1/README.md
+components:
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      description: 会话的不透明标识符。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    RequiredRequestId:
+      name: X-Request-Id
+      in: header
+      required: true
+      description: >-
+        Java 已接收或生成的请求追踪标识。Agent 必须原样用于响应头、错误体和
+        SSE envelope 的 requestId。
+      schema:
+        $ref: '#/components/schemas/RequestId'
+  headers:
+    XRequestId:
+      description: 本次请求的有效请求追踪标识。
+      required: true
+      schema:
+        $ref: '#/components/schemas/RequestId'
+    CacheControl:
+      description: SSE 响应不得被缓存。
+      required: true
+      schema:
+        type: string
+        const: no-cache
+  schemas:
+    RequestId:
+      type: string
+      minLength: 1
+      maxLength: 128
+    ChatStreamRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - content
+        - paperIds
+      properties:
+        content:
+          type: string
+          minLength: 1
+          description: 用户消息正文；至少包含一个字符。
+        paperIds:
+          type: array
+          uniqueItems: true
+          description: 空数组表示检索默认全库；非空数组严格限定到给定论文。
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+    SseEvent:
+      $ref: ../sse/v1/sse-event.schema.json
+    StreamOpenError:
+      $ref: ../sse/v1/stream-open-error.schema.json
+  responses:
+    SseStream:
+      description: >-
+        SSE v1 流。每个数据事件必须符合 SseEvent；心跳只能使用 SSE comment。
+        此响应不使用 Result<T> 包装。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        text/event-stream:
+          schema:
+            type: string
+            description: 按 ../sse/v1/README.md 编码的 UTF-8 SSE 字节流。
+          examples:
+            completed:
+              summary: 正常终止流
+              externalValue: ../sse/v1/examples/streams/run-completed.sse
+            failed:
+              summary: 失败终止流
+              externalValue: ../sse/v1/examples/streams/run-failed.sse
+    BadRequest:
+      description: 请求参数或请求体无效，流尚未建立。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StreamOpenError'
+          examples:
+            invalidRequest:
+              externalValue: ../sse/v1/examples/stream-open-error.json
+    InternalError:
+      description: Agent 在建流前发生内部错误。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StreamOpenError'
+    ServiceUnavailable:
+      description: Agent 或模型提供方在建流前不可用。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StreamOpenError'
+    UnexpectedOpenError:
+      description: 其他建流前非 2xx 错误。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StreamOpenError'

@@ -1,0 +1,7 @@
+event: run.started
+id: evt-wire-001
+data: {"schemaVersion":"1.0","type":"run.started","eventId":"evt-json-001","requestId":"req-invalid-001","runId":"run-invalid-001","conversationId":"conv-invalid-001","assistantMessageId":"msg-invalid-001","sequence":0,"timestamp":"2026-01-01T00:00:00Z","payload":{}}
+
+event: run.completed
+id: evt-invalid-002
+data: {"schemaVersion":"1.0","type":"run.completed","eventId":"evt-invalid-002","requestId":"req-invalid-001","runId":"run-invalid-001","conversationId":"conv-invalid-001","assistantMessageId":"msg-invalid-001","sequence":1,"timestamp":"2026-01-01T00:00:01Z","payload":{}}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "type": "citation.created",
+  "eventId": "evt-demo-003",
+  "requestId": "req-demo-001",
+  "runId": "run-demo-001",
+  "conversationId": "conv-demo-001",
+  "assistantMessageId": "msg-assistant-demo-001",
+  "sequence": 2,
+  "timestamp": "2026-01-01T00:00:02Z",
+  "payload": {
+    "citationId": "citation-demo-001",
+    "paperId": "paper-demo-001",
+    "paperTitle": "Synthetic Research Paper",
+    "pageNumber": 3,
+    "quote": "This is a synthetic, redistributable citation fixture."
+  }
+}

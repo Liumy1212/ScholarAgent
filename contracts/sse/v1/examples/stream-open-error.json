@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "code": "INVALID_REQUEST",
+  "message": "Request validation failed.",
+  "requestId": "req-open-error-001",
+  "retryable": false,
+  "details": [
+    {
+      "field": "content",
+      "reason": "must contain at least one character"
+    }
+  ]
+}
