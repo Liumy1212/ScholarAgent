@@ -4,7 +4,16 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 
 ## 当前状态
 
-当前处于 Phase 0 的协作基线阶段：仓库结构、工程约束、分层 `AGENTS.md` 和开发文档已经建立，三个应用尚未生成可运行代码，也没有需要安装的项目依赖。
+Phase 0 的契约与三端 Fake SSE 最小竖切已经落地：React 问答页可通过 Java BFF 调用 Python `FakeChatProvider`，并展示流式文本、终止状态和合成引用。当前进入 M0 基线收口，下一步按纵向切片完成真实 PDF 入库、检索、Rerank 和模型原生 Tool Calling。
+
+v0.1 的核心目标不是一次铺开所有科研自动化能力，而是完成一条可以真实使用的闭环：
+
+```text
+上传单篇 PDF → 自动解析与建库 → Web 预览
+→ 用户提问 → Agent 自主调用工具
+→ RAG 检索 → Rerank → LLM 流式回答
+→ 展示并跳转到论文页码引用
+```
 
 ## 仓库结构
 
@@ -26,24 +35,29 @@ flowchart LR
     React[React frontend] -->|REST / SSE| Java[Java BFF]
     Java -->|REST / SSE| Agent[Python Agent API]
     Agent --> MySQL[(MySQL)]
-    Agent --> Redis[(Redis)]
     Agent --> Qdrant[(Qdrant)]
     Agent --> Files[PDF storage]
+    Worker[Python Worker] --> MySQL
+    Worker --> Qdrant
 ```
 
 - React 只访问 Java 的 `/api/v1/**`。
 - Java 负责 Web API、统一响应、校验、错误映射、请求追踪与 SSE 转发。
-- Python 负责论文和 AI 数据、解析、检索、Prompt、模型调用与后台任务。
+- Python 负责论文和 AI 数据、解析、检索、Prompt、模型调用与后台任务，是这些数据的唯一事实来源。
+- v0.1 使用 MySQL 任务表驱动轻量 Worker，不引入 Redis Streams；Java 保持无业务持久化。
 - 数据库、PDF、向量、模型、密钥与日志均不得进入 Git。
 
 完整边界见 [架构说明](docs/architecture.md)。
 
 ## 开发路线
 
-- Phase 0：完成三端可运行骨架和 React -> Java -> Python Fake SSE 最小竖切。
-- Phase 1：完成论文上传、解析、元数据、去重与索引。
-- Phase 2：完成持久会话、全库 RAG、SSE 和引用校验。
-- Phase 3：完成论文范围过滤、联调和 `v0.1.0` 验收。
+- M0：收口已经落地的 Phase 0 Fake SSE 基线、自动检查和端到端冒烟。
+- M1：完成单篇文本型 PDF 上传、后台解析建库、状态展示和 Web 原生预览。
+- M2：完成可独立验证的 Qdrant 检索、本地 embedding、Rerank 和证据追踪。
+- M3：完成 DeepSeek/Ollama 原生 Tool Calling、持久会话、Agent 状态和引用校验。
+- M4：完成失败恢复、三端端到端、CI、部署文档和 `v0.1.0` 验收。
+
+v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR、多知识库、Redis Streams、LangGraph、研究工作区和论文写作均延后。
 
 详细内容见 [路线图](docs/roadmap.md)。
 

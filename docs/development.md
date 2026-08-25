@@ -2,22 +2,22 @@
 
 ## 1. 工具基线
 
-后续应用脚手架的目标环境：
+当前应用基线：
 
 | 区域 | 基线 |
 | --- | --- |
-| frontend | Node.js 20、pnpm 11、React 19、Vite 7、TypeScript |
+| frontend | Node.js 22.13+、pnpm 11、React 19、Vite 7、TypeScript |
 | backend | Java 21、Spring Boot 4、Maven Wrapper |
 | agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
-| infrastructure | Docker Compose；Phase 0 不要求启动 |
+| infrastructure | Docker Compose；M0 不要求启动，M1 起用于 MySQL 与 Qdrant |
 
 仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
 
 ## 2. 当前基线
 
-本阶段没有应用依赖、构建命令或运行服务。不要为“测试目录存在”而安装 Node、Maven、Python 包或 Docker。
+Phase 0 的 React、Java 和 Python Fake SSE 最小竖切已经落地，各应用依赖和检查命令以子目录 README、锁文件、Maven Wrapper 与 `pyproject.toml` 为准。M0 的检查不依赖 Docker、MySQL、Qdrant 或真实模型。
 
-可以执行的仓库级检查：
+仓库级检查：
 
 ```powershell
 git status --short --branch
@@ -25,6 +25,32 @@ git diff --check
 git ls-files
 git check-ignore -v --no-index .env .private/example.pdf agent/storage/example.db frontend/node_modules/example.js
 ```
+
+分应用检查：
+
+```powershell
+Set-Location contracts
+npm ci
+npm run validate
+
+Set-Location ..\frontend
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+
+Set-Location ..\backend
+.\mvnw.cmd verify
+
+Set-Location ..\agent
+conda run -n airesearcher-agent ruff check .
+conda run -n airesearcher-agent ruff format --check .
+conda run -n airesearcher-agent mypy
+conda run -n airesearcher-agent pytest
+```
+
+依赖安装和检查应按子系统顺序执行，不要让多个包管理器进程并发写入同一个依赖目录。
 
 `.env.example` 应保持可提交；`.env`、私有数据、PDF、数据库、向量、模型和日志必须被忽略。
 
