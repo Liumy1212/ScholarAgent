@@ -1,15 +1,28 @@
-# Frontend
+# AIResearcher Frontend
 
-AIResearcher 的 React Web 客户端目录。
+Phase 0 React 客户端，提供知识库占位页和基于 Java BFF 的流式问答页。
 
-## 职责
+## 环境
 
-- 论文批量上传、列表、状态、元数据编辑、删除与重新解析。
-- 会话列表、论文范围选择、流式问答与引用展示。
-- 只通过 Java BFF 的 `/api/v1/**` 访问系统能力。
+- Node.js 22.13+
+- pnpm 11
 
-## 当前状态
+## 本地开发
 
-当前仅建立协作边界，尚未生成 Vite 或 React 应用。后续 Phase 0 前端任务将采用 React 19、Vite 7、TypeScript、pnpm 11 和 Ant Design。
+```bash
+pnpm install
+pnpm dev
+```
 
-开始修改前请阅读本目录的 `AGENTS.md` 与 [总体架构](../docs/architecture.md)。
+开发服务器默认把 `/api/**` 代理到 `http://localhost:8080`。如需修改 Java BFF 地址，可在启动命令中设置 `VITE_API_PROXY_TARGET`。
+
+## 检查
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+浏览器仅调用相对路径 `/api/v1/**`，流式问答通过 `fetch` 发起 POST 并解析 SSE，不使用 `EventSource`。
