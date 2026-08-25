@@ -1,0 +1,181 @@
+:root {
+  color: #17213a;
+  background: #f5f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.app-layout {
+  min-height: 100vh;
+}
+
+.app-header {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding-inline: clamp(20px, 5vw, 64px);
+  box-shadow: 0 8px 24px rgb(10 27 70 / 12%);
+}
+
+.brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 30%);
+  border-radius: 10px;
+  color: white;
+  background: linear-gradient(135deg, #5877e9, #7a54d8);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.brand-name.ant-typography {
+  color: white;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.main-menu {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.page-shell {
+  width: min(980px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0 24px;
+}
+
+.page-shell h2.ant-typography {
+  margin: 10px 0 4px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.surface-card {
+  overflow: hidden;
+  border: 1px solid #e8ecf5;
+  box-shadow: 0 12px 32px rgb(38 55 100 / 6%);
+}
+
+.request-id {
+  overflow-wrap: anywhere;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+}
+
+.streaming-answer.ant-typography {
+  margin-bottom: 0;
+  color: #1c2741;
+  font-size: 16px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 3px;
+  animation: blink 1s steps(2, start) infinite;
+  background: #3157d5;
+  vertical-align: -0.16em;
+}
+
+.empty-answer {
+  min-height: 72px;
+}
+
+.citation-item {
+  width: 100%;
+  padding: 4px 0;
+}
+
+.citation-divider.ant-divider {
+  margin: 12px 0;
+}
+
+.citation-quote.ant-typography {
+  margin-bottom: 8px;
+  color: #34415e;
+  line-height: 1.7;
+}
+
+.app-footer {
+  color: #7b8498;
+  text-align: center;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-cursor {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    height: auto;
+    min-height: 64px;
+    gap: 12px;
+    padding-inline: 16px;
+  }
+
+  .brand-name.ant-typography {
+    display: none;
+  }
+
+  .main-menu .ant-menu-item {
+    padding-inline: 12px;
+  }
+
+  .page-shell {
+    width: min(100% - 24px, 980px);
+    padding-top: 28px;
+  }
+
+  .surface-card .ant-card-body {
+    padding: 18px;
+  }
+}
