@@ -1,68 +1,200 @@
-# AIResearcher Phase 0～3 路线图
+# AIResearcher v0.1 路线图
 
-## 版本策略
+## 1. 版本目标与原则
 
 - 前端开发版本：`0.1.0-dev.0`。
 - Java 开发版本：`0.1.0-SNAPSHOT`。
 - Python 开发版本：`0.1.0.dev0`。
-- Phase 0～3 全部通过 Demo 验收后发布 `v0.1.0`。
+- M0～M4 全部通过验收后发布 `v0.1.0`。
+- 实施优先级固定为：**小而完整 > 大而没做完**。
+- 每个里程碑必须形成可单独演示的纵向切片；当前里程碑未通过验收前，不提前建设后续能力。
 
-## 当前里程碑：协作基线
-
-- 初始化 Git、根配置、目录和中文文档。
-- 建立根与 frontend/backend/agent/contracts 分层 `AGENTS.md`。
-- 建立多 Chat Worktree、任务所有权和契约先行规则。
-- 不创建应用代码、运行时契约、CI 或基础设施实例。
-
-## Phase 0：可运行工程骨架
-
-目标是完成不依赖 Docker、数据库、向量库或真实模型的最小竖切：
+v0.1 的唯一核心闭环是：
 
 ```text
-React -> Java BFF -> Python Fake SSE -> Java 透传 -> React 展示
+上传单篇 PDF → 后台解析与建库 → Web 预览
+→ 用户提问 → LLM 原生 Tool Calling
+→ 向量检索 → Rerank → 流式回答
+→ 展示并跳转到论文页码引用
 ```
+
+## 2. 当前状态
+
+Phase 0 的机器可读契约和三端 Fake SSE 最小竖切已经实现：
+
+```text
+React → Java BFF → Python FakeChatProvider
+      ← Java SSE 转发 ← Python Fake SSE
+```
+
+当前已有：
+
+- Agent/Web OpenAPI、SSE v1 Schema、合法与非法示例及契约校验。
+- FastAPI 流式聊天接口、应用用例、`ChatProvider` 与确定性 `FakeChatProvider`。
+- Spring MVC BFF、请求追踪、AgentClient、SSE 转发、取消和错误映射。
+- React 知识库占位页、问答页、POST SSE parser、流状态与引用展示。
+
+当前尚缺：
+
+- 可重复执行的 CI 和 React → Java → Python 端到端冒烟测试。
+- 真实 PDF 入库、持久化、向量检索、Rerank 和模型 Provider。
+- 模型原生 Tool Calling、工具状态、持久会话和真实论文引用闭环。
+
+## 3. M0：关闭 Phase 0 基线
+
+目标是冻结可靠的开发基线，不继续扩展 Fake 功能。
 
 交付：
 
-1. contracts Chat 定义最小 Agent/Web OpenAPI、SSE v1 Schema、说明与示例，并加入契约校验。
-2. agent Chat 创建 FastAPI、普通 application use case、`ChatProvider` 与确定性的 `FakeChatProvider`。
-3. backend Chat 创建 Spring MVC BFF、`Result<T>`、请求追踪、AgentClient 与 SSE 代理。
-4. frontend Chat 创建知识库占位页、问答页、POST SSE parser 与完成/失败/中断状态。
-5. ci/smoke Chat 添加分应用 CI 和不依赖 Docker 的端到端 SSE 冒烟测试。
+1. 校准 README、架构和开发文档，使其与已经落地的三端代码一致。
+2. 顺序运行契约、frontend、backend、agent 的现有检查，修复真实失败并记录环境依赖。
+3. 增加一个不依赖 MySQL、Qdrant、真实模型或 Docker 的 React → Java → Fake Agent 冒烟测试。
+4. 建立分应用 CI，复用各子系统已有的 lint、类型检查和测试命令。
 
 验收：
 
 - 三个应用可以分别启动。
-- React 只通过 Java 显示 Fake SSE 文本与引用。
-- Java 保留 SSE 事件名称、ID、序号和 JSON envelope。
-- 正常和失败流均只有一个契约规定的终止事件。
-- Agent 不可用时 Java 返回统一错误。
-- 所有检查通过且仓库不包含敏感或运行数据。
+- 浏览器只通过 Java 获得 Fake SSE 文本与引用。
+- 正常、失败和中断流符合共享 SSE 契约。
+- 所有自动检查可从干净环境重复执行。
 
-## Phase 1：论文知识库
+## 4. M1：单篇论文上传、建库和查看
 
-- 一次上传多篇文本型 PDF，单文件默认限制 50 MB、500 页。
-- 使用 SHA-256 去重，提取并允许修改标题、作者、年份和页数。
-- 使用持久 ingestion job、Redis Streams Worker、PyMuPDF、MySQL 和 Qdrant。
-- 展示状态和失败原因，支持删除、重新解析和重建索引。
-- 新索引验证成功后原子切换；失败时旧索引继续提供检索。
-- 使用 10 篇可提取文本的 AI/计算机论文验收，不支持 OCR。
+目标是先完成“上传一篇真实论文并在 Web 端看到它”的可用闭环。
 
-## Phase 2：全库 RAG
+交付：
 
-- 创建、列出和切换持久会话。
-- 检索整个默认知识库，SSE 返回答案和页码引用。
-- 保存消息、实际模型、Prompt 版本、论文范围和引用快照。
-- 校验证据的 paper ID、page、section、quote 和 chunk ID。
-- 在 UI 中区分论文证据与未由知识库支持的模型常识。
+1. 在 Agent API 和 Web API 契约中先定义单文件上传、论文列表与详情、PDF 文件、删除、入库任务查询和失败重试。
+2. Java 只负责浏览器请求校验、DTO 转换、错误映射和 Agent API/文件流代理，不创建论文或任务数据库。
+3. Python 使用 MySQL 持久化 `Paper`、`IngestionJob` 和 `Chunk`；PDF 保存在配置指定的仓库外目录。
+4. Python Worker 使用 MySQL 任务表和租约领取任务，支持过期任务恢复、有限重试和幂等执行；v0.1 不使用 Redis Streams。
+5. 使用 SHA-256 去重、PyMuPDF 解析文本、按页切分 chunk、本地 embedding 和 Qdrant 建索引；chunk 不跨页，仅 `READY` 论文参与检索。
+6. Web 知识库页面展示论文、入库阶段、失败原因、重试和删除；详情页使用浏览器原生 PDF 预览，并支持 HTTP Range 转发。
 
-## Phase 3：论文范围过滤与 v0.1
+入库任务状态：
 
-- 在问答页增加 READY 论文多选器。
-- 空选择表示全库，非空选择严格限定所选 paper ID。
-- 完成三端联调、失败场景和完整 Demo 验收。
-- 通过全部门禁后发布并标记 `v0.1.0`。
+- 任务状态：`QUEUED`、`RUNNING`、`SUCCEEDED`、`FAILED`。
+- 执行阶段：`PARSING`、`CHUNKING`、`EMBEDDING`、`INDEXING`。
+- 论文状态：`PROCESSING`、`READY`、`FAILED`。
 
-## 后续方向
+验收：
 
-Phase 4 以后依次引入研究工作区与 arXiv、研究缺口和创新候选、受预算和审批约束的实验闭环，以及 Markdown/LaTeX 论文写作。长期科研流程出现持久执行和人工审批需求时，再通过 ADR 评估 LangGraph。
+- 上传一篇不超过 50 MB、500 页的文本型 PDF 后，Web 可观察任务从排队到 `READY`。
+- 解析失败不会产生可检索论文，并向用户展示稳定错误码和可操作说明。
+- 成功入库后可在站内预览 PDF；重复上传不会创建第二份论文或向量。
+- 删除论文会清理当前文件、记录和向量。
+
+## 5. M2：可独立验证的 Retrieval 与 Rerank
+
+目标是先把检索质量做成可测试能力，再接入 Agent。
+
+交付：
+
+1. 实现只读工具 `knowledge_base_search(query, paperIds?, topK)`：默认从 Qdrant 召回 20 个候选 chunk，再由本地 reranker 选择前 5 个证据。
+2. 实现只读工具 `document_lookup(query)`：按 paper ID、标题、作者或年份查询论文元数据，不把整篇 PDF 放入模型上下文。
+3. 默认 embedding 使用 `BAAI/bge-m3`，默认 reranker 使用 `BAAI/bge-reranker-v2-m3`；模型名称、设备和批大小均通过配置替换。
+4. 每条检索证据必须携带 `citationId`、paper ID、标题、页码、原文 quote 和 chunk ID；这些字段是回答引用的唯一事实来源。
+5. 检索前从 MySQL 取得允许参与检索的 `READY` paper ID，并作为 Qdrant 过滤条件，避免半成品索引泄露到结果中。
+
+验收：
+
+- 使用运行时生成的中英文合成论文验证跨语言查询。
+- 固定查询可以验证向量召回和 Rerank 两个阶段，并确认最终证据顺序。
+- 每条证据都能回溯到真实论文、页码、chunk 和原文；删除或未就绪论文不会被返回。
+
+## 6. M3：真正的 Tool Calling Agent
+
+目标是让 LLM 自主选择工具，而不是由代码中的问题分类器伪装成 Agent。
+
+Agent 路径：
+
+```text
+用户问题
+  ↓
+支持 Tool Calling 的 LLM
+  ├─ 知识库内容 → knowledge_base_search
+  ├─ 论文元数据 → document_lookup
+  └─ 普通问题   → 不调用工具
+  ↓
+工具结果回传 LLM
+  ↓
+流式回答 + 已验证 Citation
+```
+
+交付：
+
+1. 定义统一 `LlmProvider` 和模型原生 Tool Calling 消息类型，DeepSeek 外部 API 为默认 Provider，Ollama 为可切换 Provider。
+2. Ollama 默认冒烟模型使用 `qwen3:8b`；DeepSeek 和 Ollama 共用相同工具定义、应用用例和验证规则，不维护两套 Agent。
+3. Agent 最多执行 3 轮工具调用；工具名必须来自白名单，参数使用 Pydantic 校验，单次调用受超时和结果大小限制。
+4. PDF、工具输出和用户输入均视为不可信内容，不能增加工具权限、改变系统规则或请求隐藏推理。
+5. Python 持久化 `Conversation`、`Message`、`AgentRun`、`ToolCall` 和 citation 快照；Java 保持无业务持久化。
+6. SSE 保留现有事件并增加 `tool.status`，向 Web 提供工具名、调用 ID、`started/completed/failed` 状态和用户安全说明；不传输思维链。
+7. `run.completed` 返回最终回答模式；模型只能引用本轮工具结果中的 citation ID，无法映射的引用不得输出为论文证据。
+8. Web 去除硬编码会话，支持创建、列出、切换会话和读取历史消息；流式显示 Agent 状态、回答和论文引用。
+
+验收：
+
+- 知识库问题会产生真实 `knowledge_base_search` 工具调用和论文证据。
+- 文档信息问题会产生真实 `document_lookup` 工具调用。
+- 普通问题不调用工具，并明确标记为未使用知识库证据。
+- DeepSeek 与 Ollama 分别通过上述三类真实 Tool Calling 冒烟测试。
+- 引用只能是检索工具返回证据的子集，并可跳转到 PDF 对应页。
+
+## 7. M4：v0.1 完整性与发布
+
+目标是把成功路径升级为可以日常使用和重复部署的版本。
+
+交付：
+
+1. 完成无文本 PDF、加密或损坏 PDF、重复上传、Worker 中断、MySQL/Qdrant/LLM 不可用、工具失败和 SSE 中断的用户可见状态。
+2. 完成 Agent 运行和入库任务的超时、取消、重试、日志关联和请求追踪。
+3. 使用运行时生成的合成 PDF 建立三端端到端测试，不向仓库提交真实或测试 PDF 文件。
+4. 提供从空环境启动 MySQL、Qdrant、Python API/Worker、Java 和 React 的说明，以及 DeepSeek/Ollama 两套冒烟步骤。
+5. 接入 CI，并执行契约、单元、集成、端到端和敏感文件门禁。
+
+发布验收：
+
+1. 从空环境启动所有必需服务。
+2. 上传一篇文本型 PDF 并等待其进入 `READY`。
+3. 在 Web 中查看论文详情和 PDF。
+4. 提出知识库问题并观察真实工具调用、检索和 Rerank 状态。
+5. 接收流式回答并从引用跳转到正确页码。
+6. 分别切换 DeepSeek 和 Ollama 完成三类问题冒烟。
+7. 所有自动门禁通过后发布并标记 `v0.1.0`。
+
+## 8. v0.1 公共契约增量
+
+在 `contracts/` 中先定义并验证以下能力，再由 Python、Java 和 React 顺序消费：
+
+```text
+POST   /papers
+GET    /papers
+GET    /papers/{paperId}
+GET    /papers/{paperId}/file
+DELETE /papers/{paperId}
+
+GET    /ingestion-jobs/{jobId}
+POST   /ingestion-jobs/{jobId}/retry
+
+POST   /conversations
+GET    /conversations
+GET    /conversations/{conversationId}/messages
+POST   /conversations/{conversationId}/messages/stream
+```
+
+- 浏览器端路径统一位于 `/api/v1/**`，Agent 端路径统一位于 `/agent-api/v1/**`。
+- 普通 JSON API 使用 Java `Result<T>`；SSE、PDF 文件和健康检查不包装该结构。
+- PDF 文件端点需要保留 `Range`、`Content-Range`、`Content-Length`、`ETag` 和内容类型等必要语义。
+- SSE v1 增加 `tool.status`，并扩展 `run.completed` payload；Schema、OpenAPI、示例、非法夹具和三端测试必须一起更新。
+
+## 9. 明确延后项
+
+v0.1 固定为单用户、本地优先、单默认知识库。以下能力不进入 M0～M4：
+
+- 登录、租户、多用户授权和 Java 业务数据库。
+- 批量上传、OCR、arXiv 导入、人工笔记和自定义 PDF 阅读器。
+- 多知识库、标签、元数据编辑和 READY 论文多选器。
+- 重新解析、全库重建、索引版本原子切换和零停机索引迁移。
+- Redis Streams、LangGraph、研究工作区、实验闭环和论文写作。
+
+当单机 MySQL Worker 的吞吐或恢复能力成为真实瓶颈时，再通过基准和 ADR 评估 Redis Streams；当科研流程出现持久执行、人工审批和可恢复图状态时，再评估 LangGraph。

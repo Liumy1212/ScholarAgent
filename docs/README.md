@@ -1,7 +1,7 @@
 # Documentation
 
 - [架构边界](architecture.md)
-- [Phase 0～3 路线图](roadmap.md)
+- [v0.1 M0～M4 路线图](roadmap.md)
 - [开发环境与多 Chat 工作流](development.md)
 - [ADR 0001：三应用边界](adr/0001-application-boundaries.md)
 
