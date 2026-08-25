@@ -2,7 +2,7 @@
 
 ## Current stage
 
-- The repository is in Phase 0. The current baseline contains collaboration rules and documentation only.
+- The repository is in Phase 0. Contracts and application skeletons are being implemented and integrated locally.
 - Read `README.md`, `docs/architecture.md`, `docs/roadmap.md`, and the nearest nested `AGENTS.md` before changing a subsystem.
 - Keep each task inside its declared boundary. Do not add unrelated scaffolding, dependencies, or speculative abstractions.
 
@@ -19,8 +19,11 @@
 - Inspect `git status` before editing and preserve user or other-task changes.
 - Make contract-affecting changes in `contracts/` first. Update implementations only after the contract change is accepted.
 - A task must explicitly own shared contract files before modifying them. Never let multiple chats edit the same contract concurrently.
-- Use one bounded task per branch or Codex Worktree. Start new work from the latest accepted `main`.
-- Do not commit, push, rewrite history, or modify remote repository settings unless the task explicitly requests it.
+- Use one bounded task per local `codex/*` branch or Codex Worktree. Start new work from the latest accepted local `main`, even when it is ahead of `origin/main`.
+- A Worktree task may commit only its own validated changes to its local task branch. It must not push the branch or create a pull request.
+- Keep the Local checkout on `main`. The Local integration chat merges completed task branches into local `main` one at a time after reviewing their diff and validation results.
+- Codex must not push `main` or any task branch, create pull requests, rewrite shared history, or modify remote repository settings. The user alone publishes local `main` to GitHub.
+- Keep local task branches until the user confirms the integrated `main` has been uploaded; delete branches or Worktrees only when explicitly requested.
 
 ## Architecture rules
 
