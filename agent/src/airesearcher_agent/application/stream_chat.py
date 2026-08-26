@@ -4,7 +4,14 @@ from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from airesearcher_agent.application.ports import ChatProvider, ChatProviderError
-from airesearcher_agent.domain.chat import ChatPrompt, Citation, MessageDelta
+from airesearcher_agent.domain.chat import (
+    AnswerCompleted,
+    AnswerMode,
+    ChatPrompt,
+    Citation,
+    MessageDelta,
+    ToolStatus,
+)
 from airesearcher_agent.domain.sse import EventType, JsonValue, SseEvent
 
 type IdFactory = Callable[[str], str]
@@ -58,6 +65,14 @@ class _EventFactory:
         self._next_sequence += 1
         return event
 
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    @property
+    def assistant_message_id(self) -> str:
+        return self._assistant_message_id
+
 
 class StreamChatUseCase:
     def __init__(
@@ -75,7 +90,14 @@ class StreamChatUseCase:
         events = _EventFactory(command, id_factory=self._id_factory, clock=self._clock)
         yield events.create("run.started", {})
 
-        prompt = ChatPrompt(content=command.content, paper_ids=command.paper_ids)
+        prompt = ChatPrompt(
+            run_id=events.run_id,
+            conversation_id=command.conversation_id,
+            assistant_message_id=events.assistant_message_id,
+            content=command.content,
+            paper_ids=command.paper_ids,
+        )
+        answer_mode: AnswerMode | None = None
         try:
             async for provider_event in self._provider.stream(prompt):
                 if isinstance(provider_event, MessageDelta):
@@ -89,8 +111,23 @@ class StreamChatUseCase:
                             "paperTitle": provider_event.paper_title,
                             "pageNumber": provider_event.page_number,
                             "quote": provider_event.quote,
+                            "chunkId": provider_event.chunk_id,
                         },
                     )
+                elif isinstance(provider_event, ToolStatus):
+                    yield events.create(
+                        "tool.status",
+                        {
+                            "toolCallId": provider_event.tool_call_id,
+                            "toolName": provider_event.tool_name,
+                            "status": provider_event.status,
+                            "message": provider_event.message,
+                        },
+                    )
+                elif isinstance(provider_event, AnswerCompleted):
+                    if answer_mode is not None:
+                        raise TypeError("chat provider returned multiple completion markers")
+                    answer_mode = provider_event.answer_mode
                 else:
                     raise TypeError("chat provider returned an unsupported event")
         except ChatProviderError as error:
@@ -112,4 +149,14 @@ class StreamChatUseCase:
                 },
             )
         else:
-            yield events.create("run.completed", {})
+            if answer_mode is None:
+                yield events.create(
+                    "run.failed",
+                    {
+                        "code": "INTERNAL_ERROR",
+                        "message": "Provider did not report an answer mode.",
+                        "retryable": False,
+                    },
+                )
+            else:
+                yield events.create("run.completed", {"answerMode": answer_mode})

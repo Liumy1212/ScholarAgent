@@ -31,7 +31,7 @@ function envelope(
     eventId,
     requestId,
     runId: 'run-component-001',
-    conversationId: 'phase0-demo',
+    conversationId: 'single-paper-demo',
     assistantMessageId: 'msg-component-001',
     sequence,
     timestamp: `2026-01-01T00:00:0${sequence}Z`,
@@ -43,46 +43,101 @@ function wire(event: ReturnType<typeof envelope>): string {
   return `event: ${event.type}\nid: ${event.eventId}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+function paperListResponse(init?: RequestInit, ready = false): Response {
+  const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+  const paper = {
+    paperId: 'paper-component-001',
+    title: 'Synthetic Research Paper',
+    authors: ['Demo Author'],
+    publicationYear: 2026,
+    fileName: 'synthetic.pdf',
+    fileSizeBytes: 4096,
+    status: 'READY',
+    pageCount: 3,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:01:00Z',
+    currentIngestion: {
+      jobId: 'job-component-001',
+      status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      attempt: 1,
+      maxAttempts: 3,
+      canRetry: false,
+      failure: null,
+    },
+  };
+  return new Response(
+    JSON.stringify({
+      code: 'SUCCESS',
+      message: 'Success.',
+      requestId,
+      data: { items: ready ? [paper] : [], total: ready ? 1 : 0 },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    },
+  );
+}
+
 describe('ChatPage', () => {
   it('通过 POST SSE 展示回答、引用、requestId 和完成状态', async () => {
     let capturedRequestId = '';
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (String(input) === '/api/v1/papers') {
+          return paperListResponse(init, true);
+        }
         expect(String(input)).toBe(
-          '/api/v1/conversations/phase0-demo/messages/stream',
+          '/api/v1/conversations/single-paper-demo/messages/stream',
         );
         expect(init?.method).toBe('POST');
         const headers = new Headers(init?.headers);
         capturedRequestId = headers.get('X-Request-Id') ?? '';
         expect(JSON.parse(String(init?.body))).toEqual({
           content: '请给出合成回答',
-          paperIds: [],
+          paperIds: ['paper-component-001'],
         });
+
+        const citationId = `citation-${'c'.repeat(32)}`;
 
         const events = [
           envelope(capturedRequestId, 'run.started', 'evt-component-001', 0, {}),
-          envelope(capturedRequestId, 'message.delta', 'evt-component-002', 1, {
-            delta: '合成回答。',
+          envelope(capturedRequestId, 'tool.status', 'evt-component-tool-001', 1, {
+            toolCallId: 'call-component-001',
+            toolName: 'knowledge_base_search',
+            status: 'started',
+            message: '正在检索并重排论文证据。',
+          }),
+          envelope(capturedRequestId, 'tool.status', 'evt-component-tool-002', 2, {
+            toolCallId: 'call-component-001',
+            toolName: 'knowledge_base_search',
+            status: 'completed',
+            message: '已完成论文证据检索与重排。',
+          }),
+          envelope(capturedRequestId, 'message.delta', 'evt-component-002', 3, {
+            delta: `合成回答。[[citation:${citationId}]]`,
           }),
           envelope(
             capturedRequestId,
             'citation.created',
             'evt-component-003',
-            2,
+            4,
             {
-              citationId: 'citation-component-001',
+              citationId,
               paperId: 'paper-component-001',
               paperTitle: 'Synthetic Research Paper',
               pageNumber: 3,
               quote: 'This is synthetic evidence.',
+              chunkId: 'chunk-component-003',
             },
           ),
           envelope(
             capturedRequestId,
             'run.completed',
             'evt-component-004',
-            3,
-            {},
+            5,
+            { answerMode: 'KNOWLEDGE_BASE' },
           ),
         ];
 
@@ -98,24 +153,36 @@ describe('ChatPage', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<ChatPage />);
 
+    expect(
+      await screen.findByText('限定 paperId：paper-component-001'),
+    ).toBeTruthy();
+
     fireEvent.change(screen.getByLabelText('研究问题'), {
       target: { value: '请给出合成回答' },
     });
     fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
     expect(await screen.findByText('回答生成完成')).toBeTruthy();
-    expect(screen.getByText('合成回答。')).toBeTruthy();
-    expect(screen.getByText('Synthetic Research Paper')).toBeTruthy();
+    expect(screen.getByText(/论文证据回答/)).toBeTruthy();
+    expect(screen.getByText('[1]').getAttribute('href')).toBe(
+      '/api/v1/papers/paper-component-001/file#page=3',
+    );
+    expect(screen.getByText('knowledge_base_search')).toBeTruthy();
+    expect(screen.getByText('已完成论文证据检索与重排。')).toBeTruthy();
+    expect(screen.getAllByText('Synthetic Research Paper')).toHaveLength(2);
     expect(screen.getByText('“This is synthetic evidence.”')).toBeTruthy();
     expect(screen.getByText(`请求 ID：${capturedRequestId}`)).toBeTruthy();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('展示契约定义的建流失败和 requestId', async () => {
     let capturedRequestId = '';
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/papers') {
+          return paperListResponse(init);
+        }
         capturedRequestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
         return new Response(
@@ -154,7 +221,10 @@ describe('ChatPage', () => {
   it('在终止事件前断流时展示中断状态并保留已生成文本', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/papers') {
+          return paperListResponse(init);
+        }
         const requestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
         const partialStream = [

@@ -12,7 +12,13 @@ async def _collect(prompt: ChatPrompt) -> list[ProviderEvent]:
 
 
 def test_fake_provider_is_deterministic_and_creates_selected_paper_citations() -> None:
-    prompt = ChatPrompt(content="比较方法", paper_ids=("paper-001", "paper-002"))
+    prompt = ChatPrompt(
+        run_id="run-test-001",
+        conversation_id="conv-test-001",
+        assistant_message_id="msg-test-001",
+        content="比较方法",
+        paper_ids=("paper-001", "paper-002"),
+    )
 
     first = asyncio.run(_collect(prompt))
     second = asyncio.run(_collect(prompt))
@@ -24,7 +30,17 @@ def test_fake_provider_is_deterministic_and_creates_selected_paper_citations() -
 
 
 def test_fake_provider_creates_default_synthetic_citation() -> None:
-    events = asyncio.run(_collect(ChatPrompt(content="概括观点", paper_ids=())))
+    events = asyncio.run(
+        _collect(
+            ChatPrompt(
+                run_id="run-test-002",
+                conversation_id="conv-test-002",
+                assistant_message_id="msg-test-002",
+                content="概括观点",
+                paper_ids=(),
+            )
+        )
+    )
 
     citations = [event for event in events if isinstance(event, Citation)]
     assert len(citations) == 1
@@ -33,7 +49,13 @@ def test_fake_provider_creates_default_synthetic_citation() -> None:
 
 def test_fake_provider_exposes_deterministic_failure_flow() -> None:
     async def consume_failure() -> None:
-        prompt = ChatPrompt(content=FAKE_FAILURE_CONTENT, paper_ids=())
+        prompt = ChatPrompt(
+            run_id="run-test-failure",
+            conversation_id="conv-test-failure",
+            assistant_message_id="msg-test-failure",
+            content=FAKE_FAILURE_CONTENT,
+            paper_ids=(),
+        )
         async for _event in FakeChatProvider().stream(prompt):
             pass
 

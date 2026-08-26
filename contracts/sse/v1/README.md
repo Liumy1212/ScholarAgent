@@ -1,6 +1,6 @@
 # SSE v1 契约
 
-本目录冻结 Phase 0 流式问答的 SSE 线协议。`sse-event.schema.json` 是数据事件 envelope 的 JSON Schema，`stream-open-error.schema.json` 是建流前错误体 Schema。
+本目录冻结单篇论文 Demo 流式问答的 SSE 线协议。`sse-event.schema.json` 是数据事件 envelope 的 JSON Schema，`stream-open-error.schema.json` 是建流前错误体 Schema。
 
 ## 建流与请求追踪
 
@@ -39,7 +39,7 @@ data: {"schemaVersion":"1.0","type":"message.delta","eventId":"evt-demo-002",...
 
 ## Envelope
 
-所有五种事件都必须包含以下字段，且不接受未声明字段：
+所有六种事件都必须包含以下字段，且不接受未声明字段：
 
 | 字段 | 规则 |
 | --- | --- |
@@ -63,8 +63,11 @@ data: {"schemaVersion":"1.0","type":"message.delta","eventId":"evt-demo-002",...
 | `run.started` | 空对象 | 流的第一个数据事件 |
 | `message.delta` | `{ "delta": string }` | 非空的增量文本 |
 | `citation.created` | `citationId`、`paperId`、`paperTitle`、`pageNumber`、`quote` | 创建一条带页码和原文快照的论文引用 |
-| `run.completed` | 空对象 | 唯一的正常终止事件 |
+| `tool.status` | `toolCallId`、`toolName`、`status`、`message` | 仅展示白名单工具的 started/completed/failed 和用户安全说明 |
+| `run.completed` | `answerMode` | 唯一的正常终止事件；模式为 `KNOWLEDGE_BASE`、`DOCUMENT_LOOKUP` 或 `MODEL_KNOWLEDGE` |
 | `run.failed` | `code`、`message`、`retryable` | 唯一的失败终止事件 |
+
+`citation.created` 还必须包含可回溯到持久 chunk 的 `chunkId`。`tool.status` 不得携带工具参数、工具输出、Prompt、隐藏推理、思维链或敏感值；`toolName` 只允许 `knowledge_base_search` 和 `document_lookup`。同一个 `toolCallId` 必须先发送一次 `started`，再发送且只发送一个 `completed` 或 `failed`。
 
 所有示例都是合成、可再分发数据，位于 `examples/events/`。`examples/streams/` 提供一个正常终止流和一个失败终止流。
 
@@ -73,7 +76,7 @@ data: {"schemaVersion":"1.0","type":"message.delta","eventId":"evt-demo-002",...
 一个合法流满足：
 
 1. 第一个数据事件是 `run.started` 且 `sequence` 为 0。
-2. 中间可以有零个或多个 `message.delta` 与 `citation.created`。
+2. 中间可以有零个或多个 `tool.status`、`message.delta` 与 `citation.created`；每个工具状态生命周期必须闭合。
 3. 每个后续数据事件的 `sequence` 恰好比前一个大 1；comment 心跳不参与计数。
 4. 最后一个数据事件是且只能是一个 `run.completed` 或 `run.failed`。
 5. 终止事件之后不得再发送数据事件。
@@ -84,7 +87,7 @@ v1 不保存事件以支持重放，不接受 `Last-Event-ID`，也不定义自�
 
 ## 夹具
 
-- `examples/events/*.json`：五种事件各一个合法示例。
+- `examples/events/*.json`：六种事件各一个合法示例。
 - `examples/streams/*.sse`：合法完成流和合法失败流。
 - `examples/stream-open-error.json`：合法建流前错误。
 - `fixtures/invalid/`：必须被校验器拒绝的事件与跨事件流。

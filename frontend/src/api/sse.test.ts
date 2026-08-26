@@ -85,6 +85,45 @@ describe('consumeChatSseStream', () => {
     ).rejects.toThrow('SSE event 与 JSON type 不一致');
   });
 
+  it('解析安全的工具状态和回答模式，并拒绝泄漏参数', async () => {
+    const started = eventEnvelope('run.started', 'evt-001', 0, {});
+    const toolStarted = eventEnvelope('tool.status', 'evt-002', 1, {
+      toolCallId: 'call-001',
+      toolName: 'knowledge_base_search',
+      status: 'started',
+      message: '正在检索证据。',
+    });
+    const completed = eventEnvelope('run.completed', 'evt-003', 2, {
+      answerMode: 'KNOWLEDGE_BASE',
+    });
+    const events: ChatSseEvent[] = [];
+    const text = [started, toolStarted, completed]
+      .map((event) => wireEvent(event, event.type, event.eventId))
+      .join('');
+
+    await consumeChatSseStream(chunkedStream(text, 17), (event) => events.push(event));
+
+    expect(events[1]).toMatchObject({
+      type: 'tool.status',
+      payload: { toolName: 'knowledge_base_search', status: 'started' },
+    });
+    expect(events[2]).toMatchObject({
+      type: 'run.completed',
+      payload: { answerMode: 'KNOWLEDGE_BASE' },
+    });
+
+    const leakingTool = eventEnvelope('tool.status', 'evt-leak', 1, {
+      ...(toolStarted.payload as object),
+      arguments: { query: 'private' },
+    });
+    await expect(
+      consumeChatSseStream(
+        chunkedStream(wireEvent(leakingTool, 'tool.status', 'evt-leak'), 64),
+        () => undefined,
+      ),
+    ).rejects.toThrow('包含未声明字段 arguments');
+  });
+
   it('拒绝没有空行结束符的事件块', async () => {
     const started = eventEnvelope('run.started', 'evt-001', 0, {});
     const incomplete = wireEvent(started, 'run.started', 'evt-001').trimEnd();

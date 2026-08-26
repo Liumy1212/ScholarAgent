@@ -24,6 +24,27 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @ExceptionHandler(ApiException.class)
+    public ResponseEntity<Object> handleApiException(
+            ApiException exception,
+            HttpServletRequest request
+    ) {
+        String requestId = RequestIds.current(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(RequestIds.HEADER_NAME, requestId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        Object body = isFileRequest(request)
+                ? new FileError(
+                        FileError.SCHEMA_VERSION,
+                        exception.code(),
+                        exception.getMessage(),
+                        requestId,
+                        exception.retryable()
+                )
+                : Result.failure(exception.code(), exception.getMessage(), requestId);
+        return new ResponseEntity<>(body, headers, exception.status());
+    }
+
     @ExceptionHandler(StreamOpenException.class)
     public ResponseEntity<Object> handleStreamOpenException(
             StreamOpenException exception,
@@ -113,13 +134,26 @@ public class GlobalExceptionHandler {
                         resultCode.retryable(),
                         details
                 )
-                : Result.failure(resultCode, message, requestId);
+                : isFileRequest(request)
+                        ? new FileError(
+                                FileError.SCHEMA_VERSION,
+                                resultCode.code(),
+                                message,
+                                requestId,
+                                resultCode.retryable()
+                        )
+                        : Result.failure(resultCode, message, requestId);
         return new ResponseEntity<>(body, headers, resultCode.httpStatus());
     }
 
     private boolean isStreamingRequest(HttpServletRequest request) {
         String uri = request.getRequestURI();
         return uri.startsWith("/api/v1/conversations/") && uri.endsWith("/messages/stream");
+    }
+
+    private boolean isFileRequest(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri.startsWith("/api/v1/papers/") && uri.endsWith("/file");
     }
 
     private String defaultReason(String reason) {

@@ -2,7 +2,13 @@ from collections.abc import AsyncIterator
 from uuid import NAMESPACE_URL, uuid5
 
 from airesearcher_agent.application.ports import ChatProviderError
-from airesearcher_agent.domain.chat import ChatPrompt, Citation, MessageDelta, ProviderEvent
+from airesearcher_agent.domain.chat import (
+    AnswerCompleted,
+    ChatPrompt,
+    Citation,
+    MessageDelta,
+    ProviderEvent,
+)
 
 FAKE_FAILURE_CONTENT = "__FAKE_PROVIDER_FAILURE__"
 
@@ -31,4 +37,6 @@ class FakeChatProvider:
                 paper_title=f"Synthetic Research Paper {position}",
                 page_number=position,
                 quote=f"Synthetic, redistributable evidence for {paper_id}.",
+                chunk_id=f"chunk-demo-{position:03d}",
             )
+        yield AnswerCompleted("KNOWLEDGE_BASE")

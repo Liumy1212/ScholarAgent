@@ -20,25 +20,27 @@ v0.1 的唯一核心闭环是：
 
 ## 2. 当前状态
 
-Phase 0 的机器可读契约和三端 Fake SSE 最小竖切已经实现：
+M0～M3 的单篇论文纵向切片已经实现，M4 正在进行真实环境验收：
 
 ```text
-React → Java BFF → Python FakeChatProvider
-      ← Java SSE 转发 ← Python Fake SSE
+React → Java BFF → Python Agent → MySQL / PyMuPDF / BGE-M3 / Qdrant
+      ← Java SSE 转发 ← DeepSeek Tool Calling / 本地 Rerank / 引用校验
 ```
 
 当前已有：
 
 - Agent/Web OpenAPI、SSE v1 Schema、合法与非法示例及契约校验。
-- FastAPI 流式聊天接口、应用用例、`ChatProvider` 与确定性 `FakeChatProvider`。
-- Spring MVC BFF、请求追踪、AgentClient、SSE 转发、取消和错误映射。
-- React 知识库占位页、问答页、POST SSE parser、流状态与引用展示。
+- FastAPI 论文 API、MySQL/Alembic、带租约 Worker、PyMuPDF 按页切块、真实 BGE embedding、Qdrant 和本地 Rerank。
+- DeepSeek `deepseek-v4-flash` 原生 Tool Calling、只读工具白名单、最多三轮、Run/Tool/引用快照持久化和引用校验。
+- Spring MVC BFF 的论文/PDF/SSE 代理、请求追踪、取消、错误映射和 PDF Range 语义。
+- React 上传/入库状态/重试/删除/原生 PDF 预览，以及 Tool 状态、流式正文和可跳页引用。
+- `FakeChatProvider` 仅保留为无外部依赖的契约测试替身，不参与默认运行时。
 
-当前尚缺：
+当前待完成：
 
-- 可重复执行的 CI 和 React → Java → Python 端到端冒烟测试。
-- 真实 PDF 入库、持久化、向量检索、Rerank 和模型 Provider。
-- 模型原生 Tool Calling、工具状态、持久会话和真实论文引用闭环。
+- 在真实本机服务与浏览器中完成运行时生成 PDF 的完整验收，保存 DeepSeek Tool Call、Qdrant 召回、本地 Rerank、SSE 和引用跳页的明确证据。
+- 重跑 contracts、frontend、backend、agent 全量自动门禁和敏感文件检查。
+- 后续独立任务再建设可重复 CI；它不是本地 Demo 闭环的运行时依赖。
 
 ## 3. M0：关闭 Phase 0 基线
 
@@ -123,21 +125,21 @@ Agent 路径：
 
 交付：
 
-1. 定义统一 `LlmProvider` 和模型原生 Tool Calling 消息类型，DeepSeek 外部 API 为默认 Provider，Ollama 为可切换 Provider。
-2. Ollama 默认冒烟模型使用 `qwen3:8b`；DeepSeek 和 Ollama 共用相同工具定义、应用用例和验证规则，不维护两套 Agent。
+1. 定义统一 `LlmProvider` 和模型原生 Tool Calling 消息类型，DeepSeek 外部 API 为 v0.1 唯一默认 Provider。
+2. 使用 `deepseek-v4-flash` 的原生 Tool Calling；不使用问题分类器、Ollama 兼容模式或伪造工具调用。
 3. Agent 最多执行 3 轮工具调用；工具名必须来自白名单，参数使用 Pydantic 校验，单次调用受超时和结果大小限制。
 4. PDF、工具输出和用户输入均视为不可信内容，不能增加工具权限、改变系统规则或请求隐藏推理。
 5. Python 持久化 `Conversation`、`Message`、`AgentRun`、`ToolCall` 和 citation 快照；Java 保持无业务持久化。
 6. SSE 保留现有事件并增加 `tool.status`，向 Web 提供工具名、调用 ID、`started/completed/failed` 状态和用户安全说明；不传输思维链。
 7. `run.completed` 返回最终回答模式；模型只能引用本轮工具结果中的 citation ID，无法映射的引用不得输出为论文证据。
-8. Web 去除硬编码会话，支持创建、列出、切换会话和读取历史消息；流式显示 Agent 状态、回答和论文引用。
+8. Web 为每次页面会话生成稳定 conversation ID，并流式显示 Agent 状态、回答和论文引用；会话管理 UI 延后。
 
 验收：
 
 - 知识库问题会产生真实 `knowledge_base_search` 工具调用和论文证据。
 - 文档信息问题会产生真实 `document_lookup` 工具调用。
 - 普通问题不调用工具，并明确标记为未使用知识库证据。
-- DeepSeek 与 Ollama 分别通过上述三类真实 Tool Calling 冒烟测试。
+- DeepSeek 通过知识库、文档元数据和无工具三类真实 Tool Calling 冒烟测试。
 - 引用只能是检索工具返回证据的子集，并可跳转到 PDF 对应页。
 
 ## 7. M4：v0.1 完整性与发布
@@ -149,7 +151,7 @@ Agent 路径：
 1. 完成无文本 PDF、加密或损坏 PDF、重复上传、Worker 中断、MySQL/Qdrant/LLM 不可用、工具失败和 SSE 中断的用户可见状态。
 2. 完成 Agent 运行和入库任务的超时、取消、重试、日志关联和请求追踪。
 3. 使用运行时生成的合成 PDF 建立三端端到端测试，不向仓库提交真实或测试 PDF 文件。
-4. 提供从空环境启动 MySQL、Qdrant、Python API/Worker、Java 和 React 的说明，以及 DeepSeek/Ollama 两套冒烟步骤。
+4. 提供使用本机现有 MySQL 启动 Qdrant、Python API/Worker、Java 和 React 的说明，以及 DeepSeek 冒烟步骤。
 5. 接入 CI，并执行契约、单元、集成、端到端和敏感文件门禁。
 
 发布验收：
@@ -159,7 +161,7 @@ Agent 路径：
 3. 在 Web 中查看论文详情和 PDF。
 4. 提出知识库问题并观察真实工具调用、检索和 Rerank 状态。
 5. 接收流式回答并从引用跳转到正确页码。
-6. 分别切换 DeepSeek 和 Ollama 完成三类问题冒烟。
+6. 使用 DeepSeek 完成知识库、文档元数据和无工具三类问题冒烟。
 7. 所有自动门禁通过后发布并标记 `v0.1.0`。
 
 ## 8. v0.1 公共契约增量
@@ -196,5 +198,6 @@ v0.1 固定为单用户、本地优先、单默认知识库。以下能力不进
 - 多知识库、标签、元数据编辑和 READY 论文多选器。
 - 重新解析、全库重建、索引版本原子切换和零停机索引迁移。
 - Redis Streams、LangGraph、研究工作区、实验闭环和论文写作。
+- Ollama 或其他本地 LLM Provider；如有真实离线需求，后续通过独立契约和验收引入。
 
 当单机 MySQL Worker 的吞吐或恢复能力成为真实瓶颈时，再通过基准和 ADR 评估 Redis Streams；当科研流程出现持久执行、人工审批和可恢复图状态时，再评估 LangGraph。

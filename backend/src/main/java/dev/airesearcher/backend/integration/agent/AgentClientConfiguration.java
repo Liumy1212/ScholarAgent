@@ -7,6 +7,8 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
+
 @Configuration(proxyBeanMethods = false)
 public class AgentClientConfiguration {
 
@@ -18,6 +20,15 @@ public class AgentClientConfiguration {
         return builder
                 .baseUrl(properties.baseUrl().toString())
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .build();
+    }
+
+    @Bean("agentFileHttpClient")
+    java.net.http.HttpClient agentFileHttpClient(AgentProperties properties) {
+        Duration connectTimeout = properties.connectTimeout();
+        return java.net.http.HttpClient.newBuilder()
+                .connectTimeout(connectTimeout)
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
                 .build();
     }
 }

@@ -3,8 +3,8 @@ info:
   title: AIResearcher Web API
   version: 1.0.0
   description: >-
-    Java BFF 向 React 暴露的 Phase 0 最小流式问答契约。React 只能调用本 API，
-    不得直接访问 Python Agent。
+    Java BFF 向 React 暴露的单篇论文 Demo API。React 只调用 /api/v1/**；
+    Java 代理 Python Agent，并为普通 JSON API 提供 Result<T>。
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
   - url: /
@@ -12,15 +12,239 @@ servers:
 externalDocs:
   description: SSE v1 线协议与生命周期规则
   url: ../sse/v1/README.md
+tags:
+  - name: Papers
+  - name: Ingestion jobs
+  - name: Conversations
 paths:
+  /api/v1/papers:
+    post:
+      tags: [Papers]
+      operationId: uploadWebPaper
+      summary: 上传一篇文本型 PDF
+      description: >-
+        multipart 请求必须且只能包含一个名为 file 的 PDF，最大 50 MB、500 页。
+        Java 不保存文件，只把请求转发给 Agent。
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: 上传已接收，或返回 SHA-256 相同的既有论文。
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaperUploadResult'
+              example:
+                code: SUCCESS
+                message: Success.
+                requestId: req-demo-001
+                data:
+                  paper:
+                    paperId: paper-demo-001
+                    title: Synthetic Bilingual Research
+                    authors: [Demo Author]
+                    publicationYear: 2026
+                    fileName: synthetic-demo.pdf
+                    fileSizeBytes: 4096
+                    status: PROCESSING
+                    pageCount: null
+                    createdAt: '2026-01-01T00:00:00Z'
+                    updatedAt: '2026-01-01T00:00:00Z'
+                    currentIngestion:
+                      jobId: job-demo-001
+                      status: QUEUED
+                      stage: QUEUED
+                      attempt: 0
+                      maxAttempts: 3
+                      canRetry: false
+                      failure: null
+                  ingestionJob:
+                    jobId: job-demo-001
+                    paperId: paper-demo-001
+                    status: QUEUED
+                    stage: QUEUED
+                    attempt: 0
+                    maxAttempts: 3
+                    canRetry: false
+                    failure: null
+                    createdAt: '2026-01-01T00:00:00Z'
+                    startedAt: null
+                    completedAt: null
+                  duplicate: false
+        '400':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '413':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '415':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '422':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+    get:
+      tags: [Papers]
+      operationId: listWebPapers
+      summary: 列出论文和当前入库状态
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          description: 论文列表，按创建时间倒序。
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaperListResult'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/papers/{paperId}:
+    get:
+      tags: [Papers]
+      operationId: getWebPaper
+      summary: 获取论文详情
+      parameters:
+        - $ref: '#/components/parameters/PaperId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/PaperResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+    delete:
+      tags: [Papers]
+      operationId: deleteWebPaper
+      summary: 删除论文、当前文件、chunk 与向量
+      parameters:
+        - $ref: '#/components/parameters/PaperId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          description: 删除完成。
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletePaperResult'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '409':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/papers/{paperId}/file:
+    get:
+      tags: [Papers]
+      operationId: getWebPaperFile
+      summary: 预览或按 Range 读取 PDF
+      description: >-
+        Java 必须保留下游的 Range、Content-Range、Content-Length、Content-Type、
+        Accept-Ranges 与 ETag 语义。成功与错误均不使用 Result<T>。
+      parameters:
+        - $ref: '#/components/parameters/PaperId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+        - $ref: '#/components/parameters/OptionalRange'
+      responses:
+        '200':
+          $ref: '#/components/responses/PdfFile'
+        '206':
+          $ref: '#/components/responses/PdfPartialFile'
+        '400':
+          $ref: '#/components/responses/FileErrorResponse'
+        '404':
+          $ref: '#/components/responses/FileErrorResponse'
+        '416':
+          $ref: '#/components/responses/FileErrorResponse'
+        '500':
+          $ref: '#/components/responses/FileErrorResponse'
+        '502':
+          $ref: '#/components/responses/FileErrorResponse'
+        '504':
+          $ref: '#/components/responses/FileErrorResponse'
+  /api/v1/ingestion-jobs/{jobId}:
+    get:
+      tags: [Ingestion jobs]
+      operationId: getWebIngestionJob
+      summary: 获取入库任务状态和阶段
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/IngestionJobResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/ingestion-jobs/{jobId}/retry:
+    post:
+      tags: [Ingestion jobs]
+      operationId: retryWebIngestionJob
+      summary: 重试一个可重试的失败任务
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/IngestionJobResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '409':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
   /api/v1/conversations/{conversationId}/messages/stream:
     post:
+      tags: [Conversations]
       operationId: streamWebConversationMessage
       summary: 流式生成助手消息
       description: >-
-        Java 接收调用方提供的 X-Request-Id；未提供时生成一个，并将有效值原样
-        转发给 Agent。HTTP 200 表示流已建立；建流前的任意非 2xx 响应使用
-        StreamOpenError。建流后的错误只能通过终止事件 run.failed 表达。
+        Java 接收调用方的 X-Request-Id；缺失时生成并转发。HTTP 200 表示流已建立；
+        建流前非 2xx 使用 StreamOpenError，建流后只由 run.failed 表达失败。
       parameters:
         - $ref: '#/components/parameters/ConversationId'
         - $ref: '#/components/parameters/OptionalRequestId'
@@ -32,30 +256,26 @@ paths:
               $ref: '#/components/schemas/ChatStreamRequest'
             examples:
               defaultKnowledgeBase:
-                summary: 空 paperIds 使用默认全库
                 value:
-                  content: 请概括知识库中的主要观点。
+                  content: 论文中的核心实验结论是什么？
                   paperIds: []
-              selectedPapers:
-                summary: 仅检索指定论文
+              selectedPaper:
                 value:
-                  content: 比较这两篇论文的方法。
-                  paperIds:
-                    - paper-demo-001
-                    - paper-demo-002
+                  content: 第二页报告了什么结果？
+                  paperIds: [paper-demo-001]
       responses:
         '200':
           $ref: '#/components/responses/SseStream'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/BadStreamRequest'
         '500':
-          $ref: '#/components/responses/InternalError'
+          $ref: '#/components/responses/InternalStreamError'
         '502':
-          $ref: '#/components/responses/AgentUnavailable'
+          $ref: '#/components/responses/AgentUnavailableStreamError'
         '504':
-          $ref: '#/components/responses/AgentTimeout'
+          $ref: '#/components/responses/AgentTimeoutStreamError'
         default:
-          $ref: '#/components/responses/UnexpectedOpenError'
+          $ref: '#/components/responses/UnexpectedStreamOpenError'
       x-sse-event-schema:
         $ref: '#/components/schemas/SseEvent'
       x-sse-contract: ../sse/v1/README.md
@@ -65,66 +285,452 @@ components:
       name: conversationId
       in: path
       required: true
-      description: 会话的不透明标识符。
       schema:
-        type: string
-        minLength: 1
-        maxLength: 128
+        $ref: '#/components/schemas/Identifier'
+    PaperId:
+      name: paperId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
     OptionalRequestId:
       name: X-Request-Id
       in: header
       required: false
-      description: >-
-        可选请求追踪标识。Java 必须接收此值；缺失时生成一个，并将最终有效值
-        转发给 Agent，同时用于响应头、错误体和 SSE envelope 的 requestId。
+      description: 可选；Java 缺失时生成，并用于响应头、错误体和下游请求。
       schema:
-        $ref: '#/components/schemas/RequestId'
+        $ref: '#/components/schemas/Identifier'
+    OptionalRange:
+      name: Range
+      in: header
+      required: false
+      description: 单一 HTTP bytes range；不支持 multipart ranges。
+      schema:
+        type: string
+        pattern: '^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$'
+        example: bytes=0-1023
   headers:
     XRequestId:
       description: Java 接收或生成的有效请求追踪标识。
       required: true
       schema:
-        $ref: '#/components/schemas/RequestId'
+        $ref: '#/components/schemas/Identifier'
     CacheControl:
-      description: SSE 响应不得被缓存。
+      description: SSE 响应不得缓存。
       required: true
       schema:
         type: string
         const: no-cache
+    AcceptRanges:
+      description: PDF 支持 bytes Range。
+      required: true
+      schema:
+        type: string
+        const: bytes
+    ContentLength:
+      description: 当前响应体字节数。
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    ContentRange:
+      description: 206 响应覆盖的字节范围和完整文件大小。
+      required: true
+      schema:
+        type: string
+        pattern: '^bytes [0-9]+-[0-9]+/[0-9]+$'
+    ETag:
+      description: 基于 PDF SHA-256 的强 ETag。
+      required: true
+      schema:
+        type: string
+        minLength: 3
   schemas:
-    RequestId:
+    Identifier:
       type: string
       minLength: 1
       maxLength: 128
-    ChatStreamRequest:
+    PaperStatus:
+      type: string
+      enum: [PROCESSING, READY, FAILED]
+    IngestionJobStatus:
+      type: string
+      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED]
+    IngestionStage:
+      type: string
+      enum: [QUEUED, PARSING, CHUNKING, EMBEDDING, INDEXING, COMPLETED, FAILED]
+    IngestionFailure:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        retryable:
+          type: boolean
+    IngestionSummary:
+      type: object
+      additionalProperties: false
+      required: [jobId, status, stage, attempt, maxAttempts, canRetry, failure]
+      properties:
+        jobId:
+          $ref: '#/components/schemas/Identifier'
+        status:
+          $ref: '#/components/schemas/IngestionJobStatus'
+        stage:
+          $ref: '#/components/schemas/IngestionStage'
+        attempt:
+          type: integer
+          minimum: 0
+        maxAttempts:
+          type: integer
+          minimum: 1
+        canRetry:
+          type: boolean
+        failure:
+          oneOf:
+            - $ref: '#/components/schemas/IngestionFailure'
+            - type: 'null'
+    Paper:
       type: object
       additionalProperties: false
       required:
-        - content
-        - paperIds
+        - paperId
+        - title
+        - authors
+        - publicationYear
+        - fileName
+        - fileSizeBytes
+        - status
+        - pageCount
+        - createdAt
+        - updatedAt
+        - currentIngestion
+      properties:
+        paperId:
+          $ref: '#/components/schemas/Identifier'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        authors:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 512
+        publicationYear:
+          type: [integer, 'null']
+          minimum: 1000
+          maximum: 9999
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 512
+        fileSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 52428800
+        status:
+          $ref: '#/components/schemas/PaperStatus'
+        pageCount:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 500
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        currentIngestion:
+          $ref: '#/components/schemas/IngestionSummary'
+    IngestionJob:
+      type: object
+      additionalProperties: false
+      required:
+        - jobId
+        - paperId
+        - status
+        - stage
+        - attempt
+        - maxAttempts
+        - canRetry
+        - failure
+        - createdAt
+        - startedAt
+        - completedAt
+      properties:
+        jobId:
+          $ref: '#/components/schemas/Identifier'
+        paperId:
+          $ref: '#/components/schemas/Identifier'
+        status:
+          $ref: '#/components/schemas/IngestionJobStatus'
+        stage:
+          $ref: '#/components/schemas/IngestionStage'
+        attempt:
+          type: integer
+          minimum: 0
+        maxAttempts:
+          type: integer
+          minimum: 1
+        canRetry:
+          type: boolean
+        failure:
+          oneOf:
+            - $ref: '#/components/schemas/IngestionFailure'
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+    PaperUploadData:
+      type: object
+      additionalProperties: false
+      required: [paper, ingestionJob, duplicate]
+      properties:
+        paper:
+          $ref: '#/components/schemas/Paper'
+        ingestionJob:
+          $ref: '#/components/schemas/IngestionJob'
+        duplicate:
+          type: boolean
+    PaperListData:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Paper'
+        total:
+          type: integer
+          minimum: 0
+    DeletePaperData:
+      type: object
+      additionalProperties: false
+      required: [paperId, deleted]
+      properties:
+        paperId:
+          $ref: '#/components/schemas/Identifier'
+        deleted:
+          const: true
+    SuccessResultBase:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          const: SUCCESS
+        message:
+          type: string
+          minLength: 1
+        requestId:
+          $ref: '#/components/schemas/Identifier'
+    PaperUploadResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/PaperUploadData'
+      unevaluatedProperties: false
+    PaperListResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/PaperListData'
+      unevaluatedProperties: false
+    PaperResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/Paper'
+      unevaluatedProperties: false
+    IngestionJobResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/IngestionJob'
+      unevaluatedProperties: false
+    DeletePaperResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/DeletePaperData'
+      unevaluatedProperties: false
+    ResultError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+          not:
+            const: SUCCESS
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        requestId:
+          $ref: '#/components/schemas/Identifier'
+    FileError:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, code, message, requestId, retryable]
+      properties:
+        schemaVersion:
+          const: '1.0'
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        requestId:
+          $ref: '#/components/schemas/Identifier'
+        retryable:
+          type: boolean
+    ChatStreamRequest:
+      type: object
+      additionalProperties: false
+      required: [content, paperIds]
       properties:
         content:
           type: string
           minLength: 1
-          description: 用户消息正文；至少包含一个字符。
+          maxLength: 16000
         paperIds:
           type: array
           uniqueItems: true
+          maxItems: 100
           description: 空数组表示检索默认全库；非空数组严格限定到给定论文。
           items:
-            type: string
-            minLength: 1
-            maxLength: 128
+            $ref: '#/components/schemas/Identifier'
     SseEvent:
       $ref: ../sse/v1/sse-event.schema.json
     StreamOpenError:
       $ref: ../sse/v1/stream-open-error.schema.json
   responses:
+    PaperResultResponse:
+      description: 论文详情 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PaperResult'
+    IngestionJobResultResponse:
+      description: 入库任务 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/IngestionJobResult'
+    JsonErrorResponse:
+      description: 普通 JSON API 的稳定 Result 错误。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResultError'
+          example:
+            code: PAPER_NOT_FOUND
+            message: 未找到指定论文。
+            requestId: req-demo-error-001
+    FileErrorResponse:
+      description: PDF 端点错误；与文件成功响应一样不使用 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FileError'
+          example:
+            schemaVersion: '1.0'
+            code: RANGE_NOT_SATISFIABLE
+            message: 请求的 PDF 字节范围无效。
+            requestId: req-demo-error-001
+            retryable: false
+    PdfFile:
+      description: 完整 PDF；不使用 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Accept-Ranges:
+          $ref: '#/components/headers/AcceptRanges'
+        Content-Length:
+          $ref: '#/components/headers/ContentLength'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/pdf:
+          schema:
+            type: string
+            format: binary
+    PdfPartialFile:
+      description: 单一 Range 的 PDF 字节片段；不使用 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Accept-Ranges:
+          $ref: '#/components/headers/AcceptRanges'
+        Content-Range:
+          $ref: '#/components/headers/ContentRange'
+        Content-Length:
+          $ref: '#/components/headers/ContentLength'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/pdf:
+          schema:
+            type: string
+            format: binary
     SseStream:
       description: >-
-        SSE v1 流。Java 必须保留 Agent 的事件名、事件 ID、序号和 JSON envelope。
-        每个数据事件必须符合 SseEvent；心跳只能使用 SSE comment。此响应不使用
-        Result<T> 包装。
+        Java 原样转发共享 SSE v1 事件名、ID 和 envelope；不使用 Result，也不发送
+        隐藏推理。
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -134,16 +740,13 @@ components:
         text/event-stream:
           schema:
             type: string
-            description: 按 ../sse/v1/README.md 编码的 UTF-8 SSE 字节流。
           examples:
             completed:
-              summary: 正常终止流
               externalValue: ../sse/v1/examples/streams/run-completed.sse
             failed:
-              summary: 失败终止流
               externalValue: ../sse/v1/examples/streams/run-failed.sse
-    BadRequest:
-      description: 请求参数或请求体无效，流尚未建立。
+    BadStreamRequest:
+      description: 请求无效，流尚未建立。
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -154,7 +757,7 @@ components:
           examples:
             invalidRequest:
               externalValue: ../sse/v1/examples/stream-open-error.json
-    InternalError:
+    InternalStreamError:
       description: Java 在建流前发生内部错误。
       headers:
         X-Request-Id:
@@ -163,8 +766,8 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/StreamOpenError'
-    AgentUnavailable:
-      description: Java 在建流前无法连接 Agent，或 Agent 返回不可用错误。
+    AgentUnavailableStreamError:
+      description: Java 在建流前无法连接 Agent。
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -172,7 +775,7 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/StreamOpenError'
-    AgentTimeout:
+    AgentTimeoutStreamError:
       description: Java 等待 Agent 建流超时。
       headers:
         X-Request-Id:
@@ -181,7 +784,7 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/StreamOpenError'
-    UnexpectedOpenError:
+    UnexpectedStreamOpenError:
       description: 其他建流前非 2xx 错误。
       headers:
         X-Request-Id:

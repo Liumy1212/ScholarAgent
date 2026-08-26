@@ -6,8 +6,8 @@
   "runId": "run-demo-001",
   "conversationId": "conv-demo-001",
   "assistantMessageId": "msg-assistant-demo-001",
-  "sequence": 1,
-  "timestamp": "2026-01-01T00:00:01Z",
+  "sequence": 3,
+  "timestamp": "2026-01-01T00:00:03Z",
   "payload": {
     "delta": "合成示例答案。"
   }

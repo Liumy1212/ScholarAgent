@@ -5,6 +5,8 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from airesearcher_agent.application.errors import AgentError
+
 
 def _valid_request_id(value: str | None) -> bool:
     return value is not None and 1 <= len(value) <= 128
@@ -46,6 +48,28 @@ async def request_validation_error_handler(request: Request, error: Exception) -
     }
     return JSONResponse(
         status_code=400,
+        content=content,
+        headers={"X-Request-Id": request_id},
+    )
+
+
+async def agent_error_handler(request: Request, error: Exception) -> JSONResponse:
+    if not isinstance(error, AgentError):
+        raise error
+    request_id = _effective_request_id(request)
+    content: dict[str, Any] = {
+        "schemaVersion": "1.0",
+        "code": error.code,
+        "message": error.message,
+        "requestId": request_id,
+        "retryable": error.retryable,
+    }
+    if error.details:
+        content["details"] = [
+            {"field": detail.field, "reason": detail.reason} for detail in error.details
+        ]
+    return JSONResponse(
+        status_code=error.status_code,
         content=content,
         headers={"X-Request-Id": request_id},
     )

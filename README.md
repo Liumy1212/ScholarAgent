@@ -4,7 +4,7 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 
 ## 当前状态
 
-Phase 0 的契约与三端 Fake SSE 最小竖切已经落地：React 问答页可通过 Java BFF 调用 Python `FakeChatProvider`，并展示流式文本、终止状态和合成引用。当前进入 M0 基线收口，下一步按纵向切片完成真实 PDF 入库、检索、Rerank 和模型原生 Tool Calling。
+v0.1 单篇论文 Demo 纵向切片已经落地：React 只经 Java BFF 调用 Python Agent，支持文本型 PDF 上传、后台建库、浏览器原生预览、DeepSeek 原生 Tool Calling、Qdrant 检索、本地 Rerank、SSE 回答和页码引用。`FakeChatProvider` 只保留在无外部依赖的测试中，不是默认运行时。
 
 v0.1 的核心目标不是一次铺开所有科研自动化能力，而是完成一条可以真实使用的闭环：
 
@@ -51,13 +51,15 @@ flowchart LR
 
 ## 开发路线
 
-- M0：收口已经落地的 Phase 0 Fake SSE 基线、自动检查和端到端冒烟。
-- M1：完成单篇文本型 PDF 上传、后台解析建库、状态展示和 Web 原生预览。
-- M2：完成可独立验证的 Qdrant 检索、本地 embedding、Rerank 和证据追踪。
-- M3：完成 DeepSeek/Ollama 原生 Tool Calling、持久会话、Agent 状态和引用校验。
-- M4：完成失败恢复、三端端到端、CI、部署文档和 `v0.1.0` 验收。
+- M0：可靠的契约、三端骨架和自动检查基线。
+- M1：单篇文本型 PDF 上传、后台解析建库、状态展示和 Web 原生预览。
+- M2：Qdrant 检索、真实 BGE embedding、本地 Rerank 和证据追踪。
+- M3：DeepSeek 原生 Tool Calling、最小会话/Run 持久化和引用校验。
+- M4：失败恢复、三端端到端、启动文档和 `v0.1.0` 验收。
 
 v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR、多知识库、Redis Streams、LangGraph、研究工作区和论文写作均延后。
+
+本机启动顺序、环境变量和全量检查见 [开发环境说明](docs/development.md)；Qdrant 配置见 [Infrastructure](infrastructure/README.md)。
 
 详细内容见 [路线图](docs/roadmap.md)。
 

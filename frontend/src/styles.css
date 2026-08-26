@@ -80,6 +80,10 @@ textarea {
   padding: 48px 0 24px;
 }
 
+.page-shell-wide {
+  width: min(1120px, calc(100% - 32px));
+}
+
 .page-shell h2.ant-typography {
   margin: 10px 0 4px;
 }
@@ -94,6 +98,80 @@ textarea {
   box-shadow: 0 12px 32px rgb(38 55 100 / 6%);
 }
 
+.file-picker {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px dashed #aebbe3;
+  border-radius: 12px;
+  background: #f8faff;
+}
+
+.file-picker input[type='file'] {
+  max-width: 100%;
+}
+
+.center-state {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.paper-list-item.ant-list-item {
+  padding-block: 20px;
+}
+
+.paper-item,
+.paper-main {
+  width: 100%;
+  min-width: 0;
+}
+
+.paper-main {
+  flex: 1 1 420px;
+}
+
+.paper-main h4.ant-typography {
+  max-width: 680px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.paper-meta {
+  margin-top: 8px;
+  color: #7b8498;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ingestion-progress {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f7f9fd;
+}
+
+.ingestion-error {
+  margin-top: 4px;
+}
+
+.pdf-preview {
+  display: block;
+  width: 100%;
+  height: min(76vh, 860px);
+  border: 1px solid #dce2ef;
+  border-radius: 8px;
+  background: #eef1f7;
+}
+
+.field-alert {
+  margin-top: 10px;
+}
+
 .request-id {
   overflow-wrap: anywhere;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
@@ -106,6 +184,18 @@ textarea {
   font-size: 16px;
   line-height: 1.9;
   white-space: pre-wrap;
+}
+
+.inline-citation {
+  display: inline-flex;
+  margin-inline: 3px;
+  color: #3157d5;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.inline-citation:hover {
+  text-decoration: underline;
 }
 
 .streaming-cursor {
@@ -135,6 +225,10 @@ textarea {
   margin-bottom: 8px;
   color: #34415e;
   line-height: 1.7;
+}
+
+.citation-ids {
+  overflow-wrap: anywhere;
 }
 
 .app-footer {
@@ -173,6 +267,10 @@ textarea {
   .page-shell {
     width: min(100% - 24px, 980px);
     padding-top: 28px;
+  }
+
+  .page-shell-wide {
+    width: min(100% - 24px, 1120px);
   }
 
   .surface-card .ant-card-body {

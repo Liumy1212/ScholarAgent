@@ -1,5 +1,10 @@
 import { SseProtocolError } from '../api/errors';
-import type { ChatSseEvent, CitationCreatedEvent } from '../api/types';
+import type {
+  AnswerMode,
+  ChatSseEvent,
+  CitationCreatedEvent,
+  ToolStatusEvent,
+} from '../api/types';
 
 export type ChatStatus =
   | 'idle'
@@ -16,6 +21,7 @@ export interface ChatFailure {
 }
 
 export type Citation = CitationCreatedEvent['payload'];
+export type ToolProgress = ToolStatusEvent['payload'];
 
 interface StreamProgress {
   started: boolean;
@@ -31,6 +37,8 @@ export interface ChatState {
   conversationId: string | null;
   answer: string;
   citations: readonly Citation[];
+  tools: readonly ToolProgress[];
+  answerMode: AnswerMode | null;
   failure: ChatFailure | null;
   stream: StreamProgress;
 }
@@ -49,6 +57,8 @@ export const initialChatState: ChatState = {
   conversationId: null,
   answer: '',
   citations: [],
+  tools: [],
+  answerMode: null,
   failure: null,
   stream: EMPTY_PROGRESS,
 };
@@ -73,6 +83,8 @@ export function startChatRequest(
     conversationId,
     answer: '',
     citations: [],
+    tools: [],
+    answerMode: null,
     failure: null,
     stream: EMPTY_PROGRESS,
   };
@@ -142,6 +154,29 @@ export function applyChatEvent(
         answer: state.answer + event.payload.delta,
         stream,
       };
+    case 'tool.status': {
+      const previous = state.tools.filter(
+        (tool) => tool.toolCallId === event.payload.toolCallId,
+      );
+      if (event.payload.status === 'started') {
+        requireCondition(previous.length === 0, '工具调用只能开始一次');
+      } else {
+        requireCondition(
+          previous.length === 1 && previous[0]?.status === 'started',
+          '工具调用必须先 started，再进入终止状态',
+        );
+        requireCondition(
+          previous[0]?.toolName === event.payload.toolName,
+          '同一工具调用的 toolName 必须保持一致',
+        );
+      }
+      return {
+        ...state,
+        status: 'streaming',
+        tools: [...state.tools, event.payload],
+        stream,
+      };
+    }
     case 'citation.created':
       return {
         ...state,
@@ -150,7 +185,12 @@ export function applyChatEvent(
         stream,
       };
     case 'run.completed':
-      return { ...state, status: 'completed', stream };
+      return {
+        ...state,
+        status: 'completed',
+        answerMode: event.payload.answerMode,
+        stream,
+      };
     case 'run.failed':
       return {
         ...state,

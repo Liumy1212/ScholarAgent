@@ -1,45 +1,60 @@
 # Agent
 
-AIResearcher 的 Python Agent API、RAG 与异步 Worker 目录。
+AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 DeepSeek Tool Calling 实现。Python 是论文文件与 AI 领域数据的唯一事实来源。
 
-## 职责
+## Demo 能力
 
-- 作为论文与 AI 数据的唯一事实来源。
-- 管理论文文件、解析、索引、检索、会话、消息、引用和模型运行记录。
-- 通过 `/agent-api/v1/**` 向 Java BFF 提供 REST 与 SSE。
+- `/agent-api/v1/papers`：单 PDF 上传、SHA-256 去重、列表、详情、删除和支持 Range 的文件读取。
+- `/agent-api/v1/ingestion-jobs/**`：任务状态、阶段与有限重试。
+- PyMuPDF 按页解析文本；chunk 不跨页，保留确定性的 chunk/vector ID、页码和 quote。
+- MySQL + SQLAlchemy + Alembic；Worker 使用任务表、`SKIP LOCKED` 和数据库租约。
+- `BAAI/bge-m3` 生成 1024 维归一化向量，Qdrant 保存向量；`BAAI/bge-reranker-v2-m3` 本地重排。
+- DeepSeek `deepseek-v4-flash` 原生 Tool Calling，只允许 `knowledge_base_search` 与 `document_lookup` 两个只读工具，最多三轮。
+- SSE 只输出正文、引用、用户安全的 `tool.status` 和终止状态，不输出隐藏推理。
 
-## Phase 0 实现
+`FakeChatProvider` 仅用于无外部依赖的契约单元测试，默认运行时始终使用真实数据库、Qdrant、本地模型和 DeepSeek Provider。
 
-当前目录提供 Python 3.12 FastAPI 应用，调用链为 API route -> application use case ->
-`ChatProvider`。默认 `FakeChatProvider` 不访问网络或真实模型，会确定性地产生模拟文本和引用。
+## 配置与数据边界
 
-唯一端点严格实现共享契约：
+所有设置从进程环境读取。根目录 [`.env.example`](../.env.example) 只列键名和占位值，应用不会自动读取 `.env`。至少要设置 DeepSeek、MySQL、Qdrant 和外部存储目录变量。
 
-```text
-POST /agent-api/v1/conversations/{conversationId}/messages/stream
-```
+`AIRESEARCHER_STORAGE_DIR` 与 `AIRESEARCHER_MODEL_CACHE_DIR` 必须位于仓库外；应用会拒绝仓库内路径。PDF、模型、缓存、数据库、向量和日志不得提交。
 
-请求正文必须包含 `content` 和 `paperIds`，并通过 `X-Request-Id` 传递请求追踪标识。
-空 `paperIds` 产生默认合成引用，非空列表为每个指定 ID 产生一条合成引用。将 `content`
-精确设为 `__FAKE_PROVIDER_FAILURE__` 可稳定模拟建流后的 provider 失败。
+## 安装、迁移与启动
 
-## 本地开发
-
-使用隔离环境，不修改 Conda `base`：
+从仓库根目录使用隔离环境，不修改 Conda `base`：
 
 ```powershell
-conda create -n airesearcher-agent python=3.12 pip -y
 conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
-conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir agent/src
+
+Set-Location .\agent
+conda run -n airesearcher-agent alembic upgrade head
+Set-Location ..
 ```
 
-在 `agent/` 下运行全部检查：
+启动 Agent API（终端 1）：
+
+```powershell
+conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000
+```
+
+启动 Worker（终端 2）：
+
+```powershell
+conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
+```
+
+Worker 第一次处理论文时会把公开模型下载到外部缓存。`AIRESEARCHER_MODEL_DEVICE=auto` 优先 CUDA；CUDA 显存不足时单个模型会安全回退 CPU，不会以 Fake 结果代替。
+
+## 检查
+
+在 `agent/` 下运行：
 
 ```powershell
 conda run -n airesearcher-agent ruff check .
 conda run -n airesearcher-agent ruff format --check .
 conda run -n airesearcher-agent mypy
-conda run -n airesearcher-agent pytest
+conda run -n airesearcher-agent python -m pytest
 ```
 
 开始修改前请阅读本目录的 `AGENTS.md` 与 [总体架构](../docs/architecture.md)。

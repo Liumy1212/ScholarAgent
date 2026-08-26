@@ -12,4 +12,8 @@ public record Result<T>(String code, String message, T data, String requestId) {
     public static Result<Void> failure(ResultCode resultCode, String message, String requestId) {
         return new Result<>(resultCode.code(), message, null, requestId);
     }
+
+    public static Result<Void> failure(String code, String message, String requestId) {
+        return new Result<>(code, message, null, requestId);
+    }
 }

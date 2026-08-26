@@ -31,3 +31,9 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
   configurable: true,
   value: ResizeObserverMock,
 });
+
+const computedStyle = window.getComputedStyle.bind(window);
+Object.defineProperty(window, 'getComputedStyle', {
+  configurable: true,
+  value: (element: Element) => computedStyle(element),
+});

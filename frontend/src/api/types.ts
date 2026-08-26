@@ -34,12 +34,33 @@ export interface CitationCreatedEvent extends BaseSseEvent {
     paperTitle: string;
     pageNumber: number;
     quote: string;
+    chunkId: string;
   };
 }
 
+export type ToolName = 'knowledge_base_search' | 'document_lookup';
+export type ToolStatus = 'started' | 'completed' | 'failed';
+
+export interface ToolStatusEvent extends BaseSseEvent {
+  type: 'tool.status';
+  payload: {
+    toolCallId: string;
+    toolName: ToolName;
+    status: ToolStatus;
+    message: string;
+  };
+}
+
+export type AnswerMode =
+  | 'KNOWLEDGE_BASE'
+  | 'DOCUMENT_LOOKUP'
+  | 'MODEL_KNOWLEDGE';
+
 export interface RunCompletedEvent extends BaseSseEvent {
   type: 'run.completed';
-  payload: Record<string, never>;
+  payload: {
+    answerMode: AnswerMode;
+  };
 }
 
 export interface RunFailedEvent extends BaseSseEvent {
@@ -53,6 +74,7 @@ export interface RunFailedEvent extends BaseSseEvent {
 
 export type ChatSseEvent =
   | RunStartedEvent
+  | ToolStatusEvent
   | MessageDeltaEvent
   | CitationCreatedEvent
   | RunCompletedEvent
@@ -70,4 +92,81 @@ export interface StreamOpenError {
   requestId: string;
   retryable: boolean;
   details?: StreamOpenErrorDetail[];
+}
+
+export type PaperStatus = 'PROCESSING' | 'READY' | 'FAILED';
+export type IngestionJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+export type IngestionStage =
+  | 'QUEUED'
+  | 'PARSING'
+  | 'CHUNKING'
+  | 'EMBEDDING'
+  | 'INDEXING'
+  | 'COMPLETED'
+  | 'FAILED';
+
+export interface IngestionFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface IngestionSummary {
+  jobId: string;
+  status: IngestionJobStatus;
+  stage: IngestionStage;
+  attempt: number;
+  maxAttempts: number;
+  canRetry: boolean;
+  failure: IngestionFailure | null;
+}
+
+export interface Paper {
+  paperId: string;
+  title: string;
+  authors: string[];
+  publicationYear: number | null;
+  fileName: string;
+  fileSizeBytes: number;
+  status: PaperStatus;
+  pageCount: number | null;
+  createdAt: string;
+  updatedAt: string;
+  currentIngestion: IngestionSummary;
+}
+
+export interface IngestionJob extends IngestionSummary {
+  paperId: string;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface PaperUploadData {
+  paper: Paper;
+  ingestionJob: IngestionJob;
+  duplicate: boolean;
+}
+
+export interface PaperListData {
+  items: Paper[];
+  total: number;
+}
+
+export interface DeletePaperData {
+  paperId: string;
+  deleted: true;
+}
+
+export interface ApiResult<T> {
+  code: 'SUCCESS';
+  message: string;
+  data: T;
+  requestId: string;
+}
+
+export interface ApiErrorResult {
+  code: string;
+  message: string;
+  requestId: string;
 }

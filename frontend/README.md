@@ -1,6 +1,6 @@
 # AIResearcher Frontend
 
-Phase 0 React 客户端，提供知识库占位页和基于 Java BFF 的流式问答页。
+单篇论文 Demo 的 React 客户端。知识库页提供单 PDF 上传、入库阶段轮询、失败重试、删除与浏览器原生 PDF 预览；问答页通过 Java BFF 接收 Tool 状态、SSE 正文和可跳页的引用。
 
 ## 环境
 
@@ -10,7 +10,7 @@ Phase 0 React 客户端，提供知识库占位页和基于 Java BFF 的流式�
 ## 本地开发
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
@@ -25,4 +25,4 @@ pnpm test
 pnpm build
 ```
 
-浏览器仅调用相对路径 `/api/v1/**`，流式问答通过 `fetch` 发起 POST 并解析 SSE，不使用 `EventSource`。
+浏览器仅调用相对路径 `/api/v1/**`，不会直连 Python。流式问答通过 `fetch` 发起 POST 并解析 SSE，不使用 `EventSource`；PDF 由浏览器原生阅读器打开，引用链接使用 `#page=<页码>`，不包含自定义 PDF Viewer。

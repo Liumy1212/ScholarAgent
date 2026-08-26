@@ -9,13 +9,40 @@
 | frontend | Node.js 22.13+、pnpm 11、React 19、Vite 7、TypeScript |
 | backend | Java 21、Spring Boot 4、Maven Wrapper |
 | agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
-| infrastructure | Docker Compose；M0 不要求启动，M1 起用于 MySQL 与 Qdrant |
+| infrastructure | 本机现有 MySQL + Docker Compose Qdrant；不使用 Redis |
 
 仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
 
 ## 2. 当前基线
 
-Phase 0 的 React、Java 和 Python Fake SSE 最小竖切已经落地，各应用依赖和检查命令以子目录 README、锁文件、Maven Wrapper 与 `pyproject.toml` 为准。M0 的检查不依赖 Docker、MySQL、Qdrant 或真实模型。
+v0.1 单篇论文 Demo 的真实纵向切片已经实现：React 只调用 Java BFF，Java 转发到 Python Agent；Python 使用 MySQL、PyMuPDF、真实 BGE 模型、Qdrant、DeepSeek 原生 Tool Calling 和 SSE。`FakeChatProvider` 仅供不依赖外部服务的测试使用。
+
+真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值，应用不会自动加载 `.env`；启动 API 与 Worker 前，应在各自父 shell 中设置真实环境变量。
+
+本机启动顺序：
+
+```powershell
+# 1. 安装 Agent 并启动 Qdrant；MySQL 使用本机已有实例
+conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
+docker compose -f .\infrastructure\compose.yaml up -d qdrant
+
+# 2. 更新 MySQL schema
+Set-Location .\agent
+conda run -n airesearcher-agent alembic upgrade head
+Set-Location ..
+
+# 3. 分别在四个终端启动 Agent API、Worker、Java BFF 与 React
+conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000
+conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
+
+Set-Location .\backend
+.\mvnw.cmd spring-boot:run
+
+Set-Location .\frontend
+pnpm dev
+```
+
+启动后浏览器访问 `http://127.0.0.1:5173`。首次入库和首次问答会把公开 BGE 模型下载到外部模型缓存；`auto` 设备策略优先 CUDA，单个模型显存不足时回退 CPU。
 
 仓库级检查：
 
@@ -47,7 +74,7 @@ Set-Location ..\agent
 conda run -n airesearcher-agent ruff check .
 conda run -n airesearcher-agent ruff format --check .
 conda run -n airesearcher-agent mypy
-conda run -n airesearcher-agent pytest
+conda run -n airesearcher-agent python -m pytest
 ```
 
 依赖安装和检查应按子系统顺序执行，不要让多个包管理器进程并发写入同一个依赖目录。

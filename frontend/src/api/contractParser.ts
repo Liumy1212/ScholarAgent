@@ -8,6 +8,7 @@ import type {
   RunStartedEvent,
   StreamOpenError,
   StreamOpenErrorDetail,
+  ToolStatusEvent,
 } from './types';
 
 type JsonRecord = Record<string, unknown>;
@@ -117,6 +118,18 @@ function parseEmptyPayload(payload: unknown): Record<string, never> {
   return {};
 }
 
+function readEnum<const T extends string>(
+  value: JsonRecord,
+  key: string,
+  allowed: readonly T[],
+): T {
+  const candidate = readString(value, key);
+  if (!allowed.includes(candidate as T)) {
+    throw new SseProtocolError(`字段 ${key} 不是允许的枚举值`);
+  }
+  return candidate as T;
+}
+
 export function parseChatSseEvent(value: unknown): ChatSseEvent {
   assertRecord(value, 'SSE data');
   const base = parseBase(value);
@@ -138,6 +151,33 @@ export function parseChatSseEvent(value: unknown): ChatSseEvent {
         payload: { delta: readString(payload, 'delta') },
       } satisfies MessageDeltaEvent;
     }
+    case 'tool.status': {
+      const payload = value.payload;
+      assertRecord(payload, 'tool.status payload');
+      assertExactKeys(payload, [
+        'toolCallId',
+        'toolName',
+        'status',
+        'message',
+      ]);
+      return {
+        ...base,
+        type: 'tool.status',
+        payload: {
+          toolCallId: readString(payload, 'toolCallId', 1, 128),
+          toolName: readEnum(payload, 'toolName', [
+            'knowledge_base_search',
+            'document_lookup',
+          ] as const),
+          status: readEnum(payload, 'status', [
+            'started',
+            'completed',
+            'failed',
+          ] as const),
+          message: readString(payload, 'message', 1, 512),
+        },
+      } satisfies ToolStatusEvent;
+    }
     case 'citation.created': {
       const payload = value.payload;
       assertRecord(payload, 'citation.created payload');
@@ -147,6 +187,7 @@ export function parseChatSseEvent(value: unknown): ChatSseEvent {
         'paperTitle',
         'pageNumber',
         'quote',
+        'chunkId',
       ]);
       return {
         ...base,
@@ -157,15 +198,26 @@ export function parseChatSseEvent(value: unknown): ChatSseEvent {
           paperTitle: readString(payload, 'paperTitle'),
           pageNumber: readInteger(payload, 'pageNumber', 1),
           quote: readString(payload, 'quote'),
+          chunkId: readString(payload, 'chunkId', 1, 128),
         },
       } satisfies CitationCreatedEvent;
     }
-    case 'run.completed':
+    case 'run.completed': {
+      const payload = value.payload;
+      assertRecord(payload, 'run.completed payload');
+      assertExactKeys(payload, ['answerMode']);
       return {
         ...base,
         type: 'run.completed',
-        payload: parseEmptyPayload(value.payload),
+        payload: {
+          answerMode: readEnum(payload, 'answerMode', [
+            'KNOWLEDGE_BASE',
+            'DOCUMENT_LOOKUP',
+            'MODEL_KNOWLEDGE',
+          ] as const),
+        },
       } satisfies RunCompletedEvent;
+    }
     case 'run.failed': {
       const payload = value.payload;
       assertRecord(payload, 'run.failed payload');

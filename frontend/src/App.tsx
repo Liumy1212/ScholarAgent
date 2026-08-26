@@ -6,12 +6,12 @@ import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 type PageKey = 'chat' | 'knowledge';
 
 const menuItems = [
-  { key: 'chat', label: '论文问答' },
   { key: 'knowledge', label: '知识库' },
+  { key: 'chat', label: '论文问答' },
 ];
 
 export function App() {
-  const [page, setPage] = useState<PageKey>('chat');
+  const [page, setPage] = useState<PageKey>('knowledge');
 
   return (
     <ConfigProvider
@@ -50,7 +50,7 @@ export function App() {
           {page === 'chat' ? <ChatPage /> : <KnowledgeBasePage />}
         </Layout.Content>
         <Layout.Footer className="app-footer">
-          AIResearcher · Phase 0 Frontend
+          AIResearcher · Single-paper Demo v0.1
         </Layout.Footer>
       </Layout>
     </ConfigProvider>

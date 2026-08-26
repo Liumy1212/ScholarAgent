@@ -6,7 +6,9 @@
   "runId": "run-demo-001",
   "conversationId": "conv-demo-001",
   "assistantMessageId": "msg-assistant-demo-001",
-  "sequence": 3,
-  "timestamp": "2026-01-01T00:00:03Z",
-  "payload": {}
+  "sequence": 5,
+  "timestamp": "2026-01-01T00:00:05Z",
+  "payload": {
+    "answerMode": "KNOWLEDGE_BASE"
+  }
 }

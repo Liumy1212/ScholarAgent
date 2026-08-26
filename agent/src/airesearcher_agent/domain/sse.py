@@ -6,6 +6,7 @@ type EventType = Literal[
     "run.started",
     "message.delta",
     "citation.created",
+    "tool.status",
     "run.completed",
     "run.failed",
 ]

@@ -6,6 +6,7 @@ import type {
   RunCompletedEvent,
   RunFailedEvent,
   RunStartedEvent,
+  ToolStatusEvent,
 } from '../api/types';
 import {
   applyChatEvent,
@@ -59,6 +60,7 @@ describe('chat stream state transitions', () => {
         paperTitle: 'Synthetic Paper',
         pageNumber: 4,
         quote: 'Synthetic evidence.',
+        chunkId: 'chunk-state-004',
       },
     };
     const completed: RunCompletedEvent = {
@@ -66,7 +68,7 @@ describe('chat stream state transitions', () => {
       type: 'run.completed',
       eventId: 'evt-state-004',
       sequence: 3,
-      payload: {},
+      payload: { answerMode: 'KNOWLEDGE_BASE' },
     };
 
     const state = reduceEvents([started, delta, citation, completed]);
@@ -74,6 +76,7 @@ describe('chat stream state transitions', () => {
     expect(state.status).toBe('completed');
     expect(state.answer).toBe('合成回答。');
     expect(state.citations).toEqual([citation.payload]);
+    expect(state.answerMode).toBe('KNOWLEDGE_BASE');
     expect(markStreamEnded(state)).toBe(state);
   });
 
@@ -96,6 +99,45 @@ describe('chat stream state transitions', () => {
     expect(state.failure).toEqual(failed.payload);
   });
 
+  it('只接受 started 后的同名工具终止状态', () => {
+    const toolStarted: ToolStatusEvent = {
+      ...base,
+      type: 'tool.status',
+      eventId: 'evt-tool-001',
+      sequence: 1,
+      payload: {
+        toolCallId: 'call-state-001',
+        toolName: 'knowledge_base_search',
+        status: 'started',
+        message: '正在检索证据。',
+      },
+    };
+    const toolCompleted: ToolStatusEvent = {
+      ...toolStarted,
+      eventId: 'evt-tool-002',
+      sequence: 2,
+      payload: { ...toolStarted.payload, status: 'completed' },
+    };
+    const streaming = reduceEvents([started, toolStarted, toolCompleted]);
+
+    expect(streaming.tools).toEqual([
+      toolStarted.payload,
+      toolCompleted.payload,
+    ]);
+    expect(() => reduceEvents([started, toolCompleted])).toThrow(
+      '事件序号不连续',
+    );
+
+    const terminalWithoutStart: ToolStatusEvent = {
+      ...toolCompleted,
+      eventId: 'evt-tool-without-start',
+      sequence: 1,
+    };
+    expect(() => reduceEvents([started, terminalWithoutStart])).toThrow(
+      '工具调用必须先 started',
+    );
+  });
+
   it('把没有终止事件的断流映射为中断状态', () => {
     const streaming = applyChatEvent(
       startChatRequest(base.requestId, base.conversationId),
@@ -114,7 +156,7 @@ describe('chat stream state transitions', () => {
       type: 'run.completed',
       eventId: 'evt-state-003',
       sequence: 2,
-      payload: {},
+      payload: { answerMode: 'MODEL_KNOWLEDGE' },
     };
     const streaming = applyChatEvent(
       startChatRequest(base.requestId, base.conversationId),

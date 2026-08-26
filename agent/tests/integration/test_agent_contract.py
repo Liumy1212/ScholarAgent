@@ -8,7 +8,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from tests.helpers import ParsedSseEvent, assert_valid_lifecycle, parse_sse
 
 from airesearcher_agent.main import create_app
-from airesearcher_agent.providers.fake import FAKE_FAILURE_CONTENT
+from airesearcher_agent.providers.fake import FAKE_FAILURE_CONTENT, FakeChatProvider
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SSE_CONTRACT_ROOT = REPOSITORY_ROOT / "contracts" / "sse" / "v1"
@@ -34,7 +34,7 @@ def _post(
     headers: dict[str, str] | None = None,
 ) -> Response:
     async def send() -> Response:
-        transport = ASGITransport(app=create_app())
+        transport = ASGITransport(app=create_app(FakeChatProvider()))
         async with AsyncClient(transport=transport, base_url="http://agent.test") as client:
             return await client.post(AGENT_ROUTE, headers=headers, json=body)
 

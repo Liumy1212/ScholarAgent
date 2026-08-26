@@ -10,12 +10,14 @@ AIResearcher 的 Java Web Backend/BFF 目录。
 
 ## 当前状态
 
-Phase 0 Backend/BFF 已采用 Java 21、Spring Boot 4、Spring MVC、WebClient 和 Maven Wrapper 建立可运行骨架。当前提供：
+Demo Backend/BFF 采用 Java 21、Spring Boot 4、Spring MVC、WebClient、JDK HttpClient 和 Maven Wrapper。当前提供：
 
 - `ChatController -> ChatService -> AgentSseClient` 流式问答链路。
+- `PaperController -> AgentPaperClient/AgentFileClient` 上传、列表、详情、任务、重试、删除和 PDF 代理链路。
 - `Result<T>`、`PageResult<T>`、`ResultCode` 与全局异常处理。
 - `X-Request-Id` 接收、生成、响应和下游转发。
 - Agent 建流错误映射、SSE 事件代理、建流后 `run.failed` 终止和浏览器断开取消。
+- PDF 成功与错误均不使用 `Result<T>`；Range、Content-Range、Content-Length、Content-Type、Accept-Ranges 和 ETag 会保留。
 
 本模块不包含数据库、Mapper、RAG、Prompt 或模型逻辑。
 
@@ -25,6 +27,12 @@ Phase 0 Backend/BFF 已采用 Java 21、Spring Boot 4、Spring MVC、WebClient �
 
 ```powershell
 .\mvnw.cmd verify
+```
+
+若受限环境无法访问默认 Maven 缓存：
+
+```powershell
+.\mvnw.cmd "-Dmaven.repo.local=C:\Users\your-name\.m2\repository" verify
 ```
 
 在 macOS 或 Linux 使用：
@@ -42,9 +50,22 @@ Phase 0 Backend/BFF 已采用 Java 21、Spring Boot 4、Spring MVC、WebClient �
 | `AIRESEARCHER_AGENT_OPEN_TIMEOUT` | `5s` | 等待 Agent 建流超时 |
 | `AIRESEARCHER_SSE_EMITTER_TIMEOUT` | `0ms` | 浏览器 SSE 超时，`0ms` 表示不设置超时 |
 
-Phase 0 Web 入口为：
+启动 Java BFF（默认端口 8080）：
+
+```powershell
+.\mvnw.cmd spring-boot:run
+```
+
+Web API 入口为：
 
 ```text
+POST   /api/v1/papers
+GET    /api/v1/papers
+GET    /api/v1/papers/{paperId}
+GET    /api/v1/papers/{paperId}/file
+DELETE /api/v1/papers/{paperId}
+GET    /api/v1/ingestion-jobs/{jobId}
+POST   /api/v1/ingestion-jobs/{jobId}/retry
 POST /api/v1/conversations/{conversationId}/messages/stream
 ```
 

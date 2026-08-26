@@ -29,7 +29,6 @@ flowchart LR
     Agent --> MySQL[(Agent MySQL)]
     Agent --> Files[PDF file storage]
     Agent --> Qdrant[(Qdrant)]
-    Agent --> Ollama[Ollama]
     Agent --> DeepSeek[DeepSeek API]
     Worker[Python Worker] --> MySQL
     Worker --> Qdrant
@@ -55,7 +54,7 @@ v0.1 由 MySQL 中的持久任务表和租约驱动轻量 Python Worker，不依
 - 是论文与 AI 数据的唯一事实来源。
 - 管理论文文件和元数据、任务、chunk、索引、会话、消息、引用、AI Run 与模型调用记录。
 - 承担 PDF 解析、embedding、检索、Rerank、Tool Calling、Prompt、防提示注入规则和模型提供商适配。
-- 使用统一 Provider 接口接入 DeepSeek 和 Ollama；工具调用只允许经过参数校验的白名单只读工具。
+- 默认运行时通过统一 Provider 接口接入 DeepSeek `deepseek-v4-flash`；工具调用只允许经过参数校验的白名单只读工具。
 - 不读取 Java 数据库，不依赖 Java 代码。
 
 ## 3. 数据边界
@@ -87,7 +86,7 @@ Python 使用 `airesearcher_agent` 数据库。Java 预留 `airesearcher_web`，
 - OpenAPI、SSE Schema、事件示例与说明保存在 `contracts/`，先于实现修改。
 - 已发布版本的破坏性变化必须创建新版本，不得直接覆盖。
 
-普通 Java JSON API 使用 `Result<T>`；SSE、PDF 下载和 Actuator 不包装该结构。Phase 0 的机器可读契约由后续独立 contracts 任务冻结。
+普通 Java JSON API 使用 `Result<T>`；SSE、PDF 下载和 Actuator 不包装该结构。机器可读 OpenAPI、SSE Schema、合法与非法夹具已经在 `contracts/` 冻结并由三端共同验证。
 
 ## 5. v0.1 范围
 
@@ -97,7 +96,7 @@ v0.1 固定为单用户、本地优先、单默认知识库，并且只包含一
 2. MySQL 持久任务表、轻量 Python Worker、入库状态、失败原因、重试和删除。
 3. 论文列表、详情和浏览器原生 PDF 预览。
 4. `knowledge_base_search` 与 `document_lookup` 两个只读工具，以及本地 Rerank。
-5. DeepSeek 默认 Provider、可切换 Ollama Provider 和最多三轮的模型原生 Tool Calling。
+5. DeepSeek `deepseek-v4-flash` Provider 和最多三轮的模型原生 Tool Calling；不实现问题分类器或兼容协议伪 Tool Calling。
 6. 持久会话、Agent 工具状态、SSE 流式回答、页码引用和论文证据与普通模型回答区分。
 
 以下能力明确不进入 v0.1：

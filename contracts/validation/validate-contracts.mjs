@@ -17,6 +17,19 @@ const stableStreamFields = [
   "conversationId",
   "assistantMessageId",
 ];
+const httpMethods = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
+const routeDefinitions = [
+  { suffix: "/papers", methods: ["get", "post"], kind: "json" },
+  { suffix: "/papers/{paperId}", methods: ["get", "delete"], kind: "json" },
+  { suffix: "/papers/{paperId}/file", methods: ["get"], kind: "pdf" },
+  { suffix: "/ingestion-jobs/{jobId}", methods: ["get"], kind: "json" },
+  { suffix: "/ingestion-jobs/{jobId}/retry", methods: ["post"], kind: "json" },
+  {
+    suffix: "/conversations/{conversationId}/messages/stream",
+    methods: ["post"],
+    kind: "sse",
+  },
+];
 
 function relative(filePath) {
   return path.relative(contractsDirectory, filePath).replaceAll(path.sep, "/");
@@ -75,6 +88,27 @@ async function validateJsonSchemasAndExamples() {
   assert.ok(validateEvent, "无法加载 SSE event Schema");
   assert.ok(validateOpenError, "无法加载 StreamOpenError Schema");
 
+  const eventSchema = await readJson(path.join(sseDirectory, "sse-event.schema.json"));
+  assert.deepEqual(
+    eventSchema.$defs.toolStatusPayload.properties.toolName.enum,
+    ["knowledge_base_search", "document_lookup"],
+    "tool.status 只能公开两个只读白名单工具名",
+  );
+  assert.deepEqual(
+    eventSchema.$defs.toolStatusPayload.required,
+    ["toolCallId", "toolName", "status", "message"],
+    "tool.status payload 必须只要求安全状态字段",
+  );
+  assert.ok(
+    eventSchema.$defs.citationCreatedPayload.required.includes("chunkId"),
+    "citation.created 必须携带 chunkId",
+  );
+  assert.deepEqual(
+    eventSchema.$defs.runCompletedPayload.properties.answerMode.enum,
+    ["KNOWLEDGE_BASE", "DOCUMENT_LOOKUP", "MODEL_KNOWLEDGE"],
+    "run.completed 必须冻结三种 answerMode",
+  );
+
   const validEventDirectory = path.join(sseDirectory, "examples", "events");
   const validEventFiles = await findFiles(validEventDirectory, (filePath) =>
     filePath.endsWith(".json"),
@@ -83,6 +117,7 @@ async function validateJsonSchemasAndExamples() {
     "run.started",
     "message.delta",
     "citation.created",
+    "tool.status",
     "run.completed",
     "run.failed",
   ]);
@@ -119,7 +154,7 @@ async function validateJsonSchemasAndExamples() {
   const invalidEventFiles = await findFiles(invalidEventDirectory, (filePath) =>
     filePath.endsWith(".json"),
   );
-  assert.ok(invalidEventFiles.length > 0, "至少需要一个非法事件夹具");
+  assert.ok(invalidEventFiles.length >= 4, "必须覆盖结构、类型和安全字段非法事件");
 
   for (const eventFile of invalidEventFiles) {
     const event = await readJson(eventFile);
@@ -152,10 +187,7 @@ function parseSseBlock(block, sourceName) {
     const name = line.slice(0, separator);
     const rawValue = line.slice(separator + 1);
     const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
-    assert.ok(
-      ["event", "id", "data"].includes(name),
-      `${sourceName}: 不允许 SSE 字段 ${name}`,
-    );
+    assert.ok(["event", "id", "data"].includes(name), `${sourceName}: 不允许 SSE 字段 ${name}`);
     const values = fields.get(name) ?? [];
     values.push(value);
     fields.set(name, values);
@@ -230,6 +262,24 @@ async function validateSseStream(filePath, validateEvent) {
     }
   });
 
+  const toolCalls = new Map();
+  for (const frame of frames.filter((candidate) => candidate.data.type === "tool.status")) {
+    const { toolCallId, toolName, status } = frame.data.payload;
+    const existing = toolCalls.get(toolCallId);
+    if (status === "started") {
+      assert.equal(existing, undefined, `${sourceName}: toolCallId ${toolCallId} 只能 started 一次`);
+      toolCalls.set(toolCallId, { toolName, terminal: false });
+      continue;
+    }
+    assert.ok(existing, `${sourceName}: ${toolCallId} 必须先 started 再 ${status}`);
+    assert.equal(existing.toolName, toolName, `${sourceName}: ${toolCallId} 的 toolName 必须保持不变`);
+    assert.equal(existing.terminal, false, `${sourceName}: ${toolCallId} 只能有一个终止状态`);
+    existing.terminal = true;
+  }
+  for (const [toolCallId, state] of toolCalls) {
+    assert.equal(state.terminal, true, `${sourceName}: ${toolCallId} 必须以 completed 或 failed 结束`);
+  }
+
   const terminalFrames = frames.filter((frame) => terminalTypes.has(frame.data.type));
   assert.equal(terminalFrames.length, 1, `${sourceName}: 流必须且只能包含一个终止事件`);
   assert.equal(
@@ -256,15 +306,22 @@ async function validateSseFixtures(validateEvent) {
   }
   assert.deepEqual(
     streamTypes,
-    new Set(["run.started", "message.delta", "citation.created", "run.completed", "run.failed"]),
-    "合法流示例合计必须覆盖五种事件",
+    new Set([
+      "run.started",
+      "message.delta",
+      "citation.created",
+      "tool.status",
+      "run.completed",
+      "run.failed",
+    ]),
+    "合法流示例合计必须覆盖六种事件",
   );
 
   const invalidStreamDirectory = path.join(sseDirectory, "fixtures", "invalid", "streams");
   const invalidStreamFiles = await findFiles(invalidStreamDirectory, (filePath) =>
     filePath.endsWith(".sse"),
   );
-  assert.ok(invalidStreamFiles.length > 0, "至少需要一个非法流夹具");
+  assert.ok(invalidStreamFiles.length >= 6, "必须覆盖线格式、顺序、终止和工具生命周期非法流");
 
   for (const streamFile of invalidStreamFiles) {
     let rejected = false;
@@ -302,69 +359,113 @@ async function assertExternalValuesExist(value, specDirectory, sourceName) {
   }
 }
 
-async function validateOpenApi(specPath, expectedPath, requestIdRequired) {
-  const sourceName = relative(specPath);
-  const parser = new SwaggerParser();
-  const parsed = await parser.validate(specPath);
-  const dereferenced = await SwaggerParser.dereference(specPath);
+function operationMethods(pathItem) {
+  return Object.keys(pathItem).filter((key) => httpMethods.has(key)).sort();
+}
 
-  assert.equal(parsed.openapi, "3.1.0", `${sourceName}: OpenAPI 版本必须为 3.1.0`);
-  assert.deepEqual(Object.keys(parsed.paths), [expectedPath], `${sourceName}: 只能声明冻结路径`);
-  assert.equal(
-    JSON.stringify(parsed).toLowerCase().includes("last-event-id"),
-    false,
-    `${sourceName}: v1 不得声明 Last-Event-ID`,
-  );
+function responseSchema(response, mediaType = "application/json") {
+  return response.content?.[mediaType]?.schema;
+}
 
-  await assertExternalValuesExist(parsed, path.dirname(specPath), sourceName);
-  await access(path.resolve(path.dirname(specPath), parsed.externalDocs.url));
-
-  const operation = dereferenced.paths[expectedPath].post;
-  assert.ok(operation, `${sourceName}: 冻结路径必须定义 POST`);
-  const requestIdParameter = operation.parameters.find(
+function assertRequestId(operation, required, sourceName) {
+  const requestIdParameter = (operation.parameters ?? []).find(
     (parameter) => parameter.in === "header" && parameter.name.toLowerCase() === "x-request-id",
   );
-  assert.ok(requestIdParameter, `${sourceName}: 必须声明 X-Request-Id`);
-  assert.equal(
-    requestIdParameter.required,
-    requestIdRequired,
-    `${sourceName}: X-Request-Id required 值不正确`,
-  );
+  assert.ok(requestIdParameter, `${sourceName}: 每个 operation 必须声明 X-Request-Id`);
+  assert.equal(requestIdParameter.required, required, `${sourceName}: X-Request-Id required 不正确`);
+}
 
-  const conversationIdParameter = operation.parameters.find(
-    (parameter) => parameter.in === "path" && parameter.name === "conversationId",
-  );
-  assert.equal(conversationIdParameter?.required, true, `${sourceName}: conversationId 必须是必填路径参数`);
+function assertPathParameters(operation, pathName, sourceName) {
+  const names = [...pathName.matchAll(/\{([^}]+)\}/gu)].map((match) => match[1]);
+  for (const name of names) {
+    const parameter = (operation.parameters ?? []).find(
+      (candidate) => candidate.in === "path" && candidate.name === name,
+    );
+    assert.equal(parameter?.required, true, `${sourceName}: ${name} 必须是必填路径参数`);
+  }
+}
 
-  const requestSchema = operation.requestBody.content["application/json"].schema;
-  assert.equal(requestSchema.type, "object", `${sourceName}: 请求体必须是对象`);
-  assert.equal(requestSchema.additionalProperties, false, `${sourceName}: 请求体不得有额外字段`);
-  assert.deepEqual(
-    [...requestSchema.required].sort(),
-    ["content", "paperIds"],
-    `${sourceName}: 请求体必须要求 content 和 paperIds`,
-  );
-  assert.equal(requestSchema.properties.content.type, "string", `${sourceName}: content 必须是 string`);
-  assert.equal(requestSchema.properties.paperIds.type, "array", `${sourceName}: paperIds 必须是 array`);
+function assertResponseRequestIds(operation, sourceName) {
+  for (const [status, response] of Object.entries(operation.responses)) {
+    assert.ok(response.headers?.["X-Request-Id"], `${sourceName}: ${status} 必须返回 X-Request-Id`);
+  }
+}
+
+function assertJsonOperation(operation, side, sourceName) {
+  const success = operation.responses["200"];
+  assert.ok(success, `${sourceName}: 普通 JSON operation 必须有 200 响应`);
+  const schema = responseSchema(success);
+  assert.ok(schema, `${sourceName}: 200 必须返回 application/json`);
   assert.equal(
-    requestSchema.properties.paperIds.items.type,
-    "string",
-    `${sourceName}: paperIds 元素必须是 string`,
+    Object.hasOwn(success.content, "text/event-stream"),
+    false,
+    `${sourceName}: 普通 JSON operation 不得返回 SSE`,
   );
+  const serialized = JSON.stringify(schema);
+  if (side === "web") {
+    assert.match(serialized, /"const":"SUCCESS"/u, `${sourceName}: Web JSON 成功响应必须使用 Result`);
+    assert.match(serialized, /"data"/u, `${sourceName}: Web JSON Result 必须包含 data`);
+  } else {
+    assert.doesNotMatch(serialized, /"const":"SUCCESS"/u, `${sourceName}: Agent DTO 不得使用 Java Result`);
+  }
+
+  for (const [status, response] of Object.entries(operation.responses)) {
+    if (status === "200") {
+      continue;
+    }
+    const errorSchema = responseSchema(response);
+    assert.ok(errorSchema, `${sourceName}: ${status} 必须返回 application/json 错误`);
+    const errorText = JSON.stringify(errorSchema);
+    if (side === "web") {
+      assert.match(errorText, /"requestId"/u, `${sourceName}: Web 错误必须包含 requestId`);
+      assert.doesNotMatch(errorText, /"schemaVersion"/u, `${sourceName}: 普通 Web 错误必须是 Result`);
+    } else {
+      assert.match(errorText, /"schemaVersion"/u, `${sourceName}: Agent 错误必须有 schemaVersion`);
+      assert.match(errorText, /"retryable"/u, `${sourceName}: Agent 错误必须有 retryable`);
+    }
+  }
+}
+
+function assertPdfOperation(operation, sourceName) {
+  for (const status of ["200", "206"]) {
+    const response = operation.responses[status];
+    assert.ok(response?.content?.["application/pdf"], `${sourceName}: ${status} 必须返回 application/pdf`);
+    assert.equal(Object.hasOwn(response.content, "application/json"), false, `${sourceName}: PDF 不得包装 JSON`);
+    for (const header of ["X-Request-Id", "Accept-Ranges", "Content-Length", "ETag"]) {
+      assert.ok(response.headers?.[header], `${sourceName}: ${status} 必须声明 ${header}`);
+    }
+  }
+  assert.ok(operation.responses["206"].headers["Content-Range"], `${sourceName}: 206 必须声明 Content-Range`);
+  const rangeParameter = operation.parameters.find(
+    (parameter) => parameter.in === "header" && parameter.name.toLowerCase() === "range",
+  );
+  assert.equal(rangeParameter?.required, false, `${sourceName}: Range 必须是可选请求头`);
+
+  for (const [status, response] of Object.entries(operation.responses)) {
+    if (["200", "206"].includes(status)) {
+      continue;
+    }
+    const schema = responseSchema(response);
+    assert.ok(schema, `${sourceName}: ${status} PDF 错误必须是 application/json`);
+    assert.match(JSON.stringify(schema), /"schemaVersion"/u, `${sourceName}: PDF 错误不得使用 Result`);
+  }
+}
+
+function assertSseOperation(operation, sourceName) {
+  const requestSchema = operation.requestBody?.content?.["application/json"]?.schema;
+  assert.ok(requestSchema, `${sourceName}: SSE 请求必须是 application/json`);
+  assert.equal(requestSchema.type, "object", `${sourceName}: SSE 请求体必须是对象`);
+  assert.equal(requestSchema.additionalProperties, false, `${sourceName}: SSE 请求体不得有额外字段`);
+  assert.deepEqual([...requestSchema.required].sort(), ["content", "paperIds"]);
   assert.match(
     requestSchema.properties.paperIds.description,
     /空数组.*默认全库/u,
     `${sourceName}: 必须冻结空 paperIds 的默认全库语义`,
   );
 
-  const successResponse = operation.responses["200"];
-  assert.ok(successResponse.content["text/event-stream"], `${sourceName}: 200 必须返回 text/event-stream`);
-  assert.equal(
-    Object.hasOwn(successResponse.content, "application/json"),
-    false,
-    `${sourceName}: SSE 成功响应不得使用 JSON Result 包装`,
-  );
-  assert.ok(successResponse.headers["X-Request-Id"], `${sourceName}: 200 必须返回 X-Request-Id`);
+  const success = operation.responses["200"];
+  assert.ok(success.content?.["text/event-stream"], `${sourceName}: 200 必须返回 text/event-stream`);
+  assert.equal(Object.hasOwn(success.content, "application/json"), false, `${sourceName}: SSE 不得使用 Result`);
   assert.equal(
     operation["x-sse-event-schema"].title,
     "AIResearcher SSE event v1",
@@ -375,32 +476,151 @@ async function validateOpenApi(specPath, expectedPath, requestIdRequired) {
     if (status === "200") {
       continue;
     }
-    assert.ok(response.content?.["application/json"], `${sourceName}: ${status} 必须返回 JSON`);
-    assert.equal(
-      response.content["application/json"].schema.title,
-      "AIResearcher StreamOpenError v1",
-      `${sourceName}: ${status} 必须使用 StreamOpenError`,
-    );
-    assert.ok(response.headers?.["X-Request-Id"], `${sourceName}: ${status} 必须返回 X-Request-Id`);
+    const schema = responseSchema(response);
+    assert.equal(schema?.title, "AIResearcher StreamOpenError v1", `${sourceName}: ${status} 必须使用 StreamOpenError`);
   }
 
   return requestSchema;
 }
 
+function validateExample(schema, example, sourceName) {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  assert.equal(
+    validate(example),
+    true,
+    `${sourceName}: OpenAPI inline example 未通过 Schema: ${formatAjvErrors(validate.errors)}`,
+  );
+}
+
+function validateInlineExamples(document, sourceName) {
+  for (const [pathName, pathItem] of Object.entries(document.paths)) {
+    for (const method of operationMethods(pathItem)) {
+      const operation = pathItem[method];
+      for (const [mediaType, media] of Object.entries(operation.requestBody?.content ?? {})) {
+        if (media.example !== undefined) {
+          validateExample(media.schema, media.example, `${sourceName}: ${method} ${pathName} ${mediaType}`);
+        }
+        for (const [name, example] of Object.entries(media.examples ?? {})) {
+          if (example.value !== undefined) {
+            validateExample(media.schema, example.value, `${sourceName}: ${method} ${pathName} ${name}`);
+          }
+        }
+      }
+      for (const [status, response] of Object.entries(operation.responses)) {
+        for (const [mediaType, media] of Object.entries(response.content ?? {})) {
+          if (media.example !== undefined) {
+            validateExample(
+              media.schema,
+              media.example,
+              `${sourceName}: ${method} ${pathName} ${status} ${mediaType}`,
+            );
+          }
+          for (const [name, example] of Object.entries(media.examples ?? {})) {
+            if (example.value !== undefined) {
+              validateExample(
+                media.schema,
+                example.value,
+                `${sourceName}: ${method} ${pathName} ${status} ${name}`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired) {
+  const sourceName = relative(specPath);
+  const parser = new SwaggerParser();
+  const parsed = await parser.validate(specPath);
+  const dereferenced = await SwaggerParser.dereference(specPath);
+
+  assert.equal(parsed.openapi, "3.1.0", `${sourceName}: OpenAPI 版本必须为 3.1.0`);
+  const expectedPaths = routeDefinitions.map((route) => `${prefix}${route.suffix}`).sort();
+  assert.deepEqual(Object.keys(parsed.paths).sort(), expectedPaths, `${sourceName}: Demo 路径集合不完整`);
+  assert.equal(
+    JSON.stringify(parsed).toLowerCase().includes("last-event-id"),
+    false,
+    `${sourceName}: v1 不得声明 Last-Event-ID`,
+  );
+
+  await assertExternalValuesExist(parsed, path.dirname(specPath), sourceName);
+  await access(path.resolve(path.dirname(specPath), parsed.externalDocs.url));
+
+  for (const route of routeDefinitions) {
+    const pathName = `${prefix}${route.suffix}`;
+    const pathItem = dereferenced.paths[pathName];
+    assert.deepEqual(operationMethods(pathItem), [...route.methods].sort(), `${sourceName}: ${pathName} 方法不正确`);
+    for (const method of route.methods) {
+      const operation = pathItem[method];
+      const operationName = `${sourceName}: ${method.toUpperCase()} ${pathName}`;
+      assertRequestId(operation, requestIdRequired, operationName);
+      assertPathParameters(operation, pathName, operationName);
+      assertResponseRequestIds(operation, operationName);
+      if (route.kind === "json") {
+        assertJsonOperation(operation, side, operationName);
+      } else if (route.kind === "pdf") {
+        assertPdfOperation(operation, operationName);
+      } else {
+        assertSseOperation(operation, operationName);
+      }
+    }
+  }
+
+  const upload = dereferenced.paths[`${prefix}/papers`].post;
+  const uploadSchema = upload.requestBody.content["multipart/form-data"].schema;
+  assert.equal(uploadSchema.type, "object", `${sourceName}: 上传必须是 multipart object`);
+  assert.equal(uploadSchema.additionalProperties, false, `${sourceName}: 上传不得包含额外 part`);
+  assert.deepEqual(uploadSchema.required, ["file"], `${sourceName}: 上传必须且只能要求 file`);
+  assert.deepEqual(Object.keys(uploadSchema.properties), ["file"], `${sourceName}: 上传只能定义 file`);
+  assert.equal(uploadSchema.properties.file.format, "binary", `${sourceName}: file 必须是 binary`);
+
+  validateInlineExamples(dereferenced, sourceName);
+  return { parsed, dereferenced };
+}
+
 async function validateOpenApis() {
   const agentSpec = path.join(contractsDirectory, "agent-api", "agent-openapi-v1.yaml");
   const webSpec = path.join(contractsDirectory, "web-api", "web-openapi-v1.yaml");
-  const agentRequestSchema = await validateOpenApi(
-    agentSpec,
-    "/agent-api/v1/conversations/{conversationId}/messages/stream",
-    true,
+  const agent = await loadAndValidateOpenApi(agentSpec, "/agent-api/v1", "agent", true);
+  const web = await loadAndValidateOpenApi(webSpec, "/api/v1", "web", false);
+
+  const commonSchemas = [
+    "Identifier",
+    "PaperStatus",
+    "IngestionJobStatus",
+    "IngestionStage",
+    "IngestionFailure",
+    "IngestionSummary",
+    "Paper",
+    "IngestionJob",
+    "ChatStreamRequest",
+  ];
+  for (const name of commonSchemas) {
+    assert.deepEqual(
+      agent.parsed.components.schemas[name],
+      web.parsed.components.schemas[name],
+      `Agent API 与 Web API 的 ${name} 必须完全一致`,
+    );
+  }
+  assert.deepEqual(
+    agent.parsed.components.schemas.PaperUploadResponse,
+    web.parsed.components.schemas.PaperUploadData,
+    "上传 data DTO 必须跨 BFF 保持一致",
   );
-  const webRequestSchema = await validateOpenApi(
-    webSpec,
-    "/api/v1/conversations/{conversationId}/messages/stream",
-    false,
+  assert.deepEqual(
+    agent.parsed.components.schemas.PaperListResponse,
+    web.parsed.components.schemas.PaperListData,
+    "论文列表 data DTO 必须跨 BFF 保持一致",
   );
-  assert.deepEqual(agentRequestSchema, webRequestSchema, "Agent API 与 Web API 请求体必须完全一致");
+  assert.deepEqual(
+    agent.parsed.components.schemas.DeletePaperResponse,
+    web.parsed.components.schemas.DeletePaperData,
+    "删除 data DTO 必须跨 BFF 保持一致",
+  );
 }
 
 async function main() {
@@ -408,10 +628,11 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents");
+  console.log("- 2 OpenAPI documents with 7 Demo operations plus shared SSE");
   console.log("- 2 JSON Schemas");
-  console.log("- 5 valid event examples and 1 StreamOpenError example");
+  console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");
+  console.log("- Agent/Web DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
 }
 
 main().catch((error) => {

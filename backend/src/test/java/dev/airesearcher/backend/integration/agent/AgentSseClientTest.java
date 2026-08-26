@@ -66,10 +66,12 @@ class AgentSseClientTest {
         List<ServerSentEvent<String>> dataEvents = events.stream()
                 .filter(event -> event.data() != null)
                 .toList();
-        assertThat(dataEvents).hasSize(4);
-        assertThat(dataEvents.get(1).event()).isEqualTo("message.delta");
-        assertThat(dataEvents.get(1).id()).isEqualTo("evt-demo-002");
-        assertThat(dataEvents.get(1).data()).contains("\"type\":\"message.delta\"");
+        assertThat(dataEvents).hasSize(6);
+        assertThat(dataEvents.get(1).event()).isEqualTo("tool.status");
+        assertThat(dataEvents.get(2).event()).isEqualTo("tool.status");
+        assertThat(dataEvents.get(3).event()).isEqualTo("message.delta");
+        assertThat(dataEvents.get(3).id()).isEqualTo("evt-demo-002");
+        assertThat(dataEvents.get(3).data()).contains("\"type\":\"message.delta\"");
     }
 
     @Test

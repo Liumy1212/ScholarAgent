@@ -1,0 +1,1 @@
+"""Leased MySQL ingestion worker."""
