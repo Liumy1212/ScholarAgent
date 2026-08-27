@@ -11,89 +11,14 @@
 | agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
 | infrastructure | Docker Compose MySQL 8.4 + Qdrant 1.19；不使用 Redis |
 
-仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
+仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。首次部署、环境变量、
+一键启动、停止与排错统一见 [Windows 本地部署与启动](deployment.md)。
 
-## 2. 当前基线
+## 2. 当前基线与验证
 
-v0.1 单篇论文 Demo 的真实纵向切片已经实现：React 只调用 Java BFF，Java 转发到 Python Agent；Python 使用 MySQL、PyMuPDF、真实 BGE 模型、Qdrant、DeepSeek 原生 Tool Calling 和 SSE。`FakeChatProvider` 仅供不依赖外部服务的测试使用。
-
-真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值；复制得到的 `.env`
-由 Compose 通过 `--env-file` 读取，但应用不会自动加载它。启动 Alembic、Agent API 与 Worker
-前，应在各自父 shell 中无回显地加载应用变量，并排除 Compose 专用的
-`AIRESEARCHER_DB_ROOT_PASSWORD`。完整命令和回退方式见
-[Infrastructure](../infrastructure/README.md)。
-
-本地启动顺序固定为：MySQL/Qdrant 健康 → Alembic → Agent API/Worker → Java BFF → React。
-以下 `$DockerCli` 按 Infrastructure 文档在当前基础设施终端中定位，不要求修改全局 `PATH`。
-
-```powershell
-# 1. 从仓库根目录安装 Agent
-conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
-
-# 2. 启动容器化 MySQL 与 Qdrant
-& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml config --quiet
-& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql qdrant
-& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml ps
-Invoke-WebRequest http://127.0.0.1:6333/healthz -UseBasicParsing
-```
-
-在运行 Alembic、Agent API 或 Worker 的每个父 PowerShell 中，先从仓库根目录执行以下代码块。
-它不会回显值，也不会加载 MySQL root 密码：
-
-```powershell
-Get-Content -LiteralPath .\.env | ForEach-Object {
-    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
-        $name = $Matches[1]
-        $value = $Matches[2]
-        if ($name -ne 'AIRESEARCHER_DB_ROOT_PASSWORD') {
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
-        }
-    }
-}
-```
-
-MySQL 显示为 `healthy` 后更新 schema：
-
-```powershell
-Set-Location .\agent
-conda run -n airesearcher-agent alembic upgrade head
-conda run -n airesearcher-agent alembic current
-Set-Location ..
-```
-
-随后分别启动应用。Agent API（终端 1）：
-
-```powershell
-conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000
-```
-
-Worker（终端 2）：
-
-```powershell
-conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
-```
-
-Java BFF（终端 3）：
-
-Java 不需要数据库变量；默认连接 `http://localhost:8000`。如需覆盖，只向该终端设置
-`AIRESEARCHER_AGENT_*` 变量。
-
-```powershell
-Set-Location .\backend
-.\mvnw.cmd spring-boot:run
-```
-
-React（终端 4）：
-
-React 不需要数据库变量；默认代理到 `http://localhost:8080`。如需覆盖，只向该终端设置
-`VITE_API_PROXY_TARGET`。
-
-```powershell
-Set-Location .\frontend
-pnpm dev
-```
-
-启动后浏览器访问 `http://127.0.0.1:5173`。首次入库和首次问答会把公开 BGE 模型下载到外部模型缓存；`auto` 设备策略优先 CUDA，单个模型显存不足时回退 CPU。
+v0.1 单篇论文 Demo 的真实纵向切片已经实现：React 只调用 Java BFF，Java 转发到 Python
+Agent；Python 使用 MySQL、PyMuPDF、真实 BGE 模型、Qdrant、DeepSeek 原生 Tool Calling 和
+SSE。`FakeChatProvider` 仅供无外部依赖测试使用。
 
 仓库级检查：
 
@@ -129,8 +54,7 @@ conda run -n airesearcher-agent python -m pytest
 ```
 
 依赖安装和检查应按子系统顺序执行，不要让多个包管理器进程并发写入同一个依赖目录。
-
-`.env.example` 应保持可提交；`.env`、私有数据、PDF、数据库、向量、模型和日志必须被忽略。
+`.env`、私有数据、PDF、数据库、向量、模型和日志必须被忽略；只有 `.env.example` 可以提交。
 
 ## 3. 多 Chat 原则
 

@@ -2,6 +2,7 @@
 
 - [架构边界](architecture.md)
 - [v0.1 M0～M4 路线图](roadmap.md)
+- [Windows 本地部署与启动](deployment.md)
 - [开发环境与多 Chat 工作流](development.md)
 - [ADR 0001：三应用边界](adr/0001-application-boundaries.md)
 
