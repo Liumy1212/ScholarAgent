@@ -23,18 +23,25 @@ AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 Deep
 ## 安装、迁移与启动
 
 从仓库根目录使用隔离环境，不修改 Conda `base`。先按
-[Infrastructure](../infrastructure/README.md) 创建未跟踪的 `.env`、启动 MySQL，并在当前
-PowerShell 中加载应用变量；等待 MySQL 显示为 `healthy` 后再运行迁移：
+[Infrastructure](../infrastructure/README.md) 创建未跟踪的 `.env`、定位当前会话的
+`$DockerCli`、启动 MySQL 与 Qdrant，并在当前 PowerShell 中加载应用变量；等待 MySQL 显示为
+`healthy` 且 Qdrant 健康检查通过后再运行迁移：
 
 ```powershell
 conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
-docker compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql
-docker compose --env-file .\.env -f .\infrastructure\compose.yaml ps mysql
+& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql qdrant
+& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml ps
+Invoke-WebRequest http://127.0.0.1:6333/healthz -UseBasicParsing
 
 Set-Location .\agent
 conda run -n airesearcher-agent alembic upgrade head
+conda run -n airesearcher-agent alembic current
 Set-Location ..
 ```
+
+如果 Qdrant 已由其他容器提供，只启动 `mysql`，不要让 Compose 重复占用 6333/6334。Agent API
+与 Worker 必须在两个独立终端启动，并在各自父 PowerShell 中重新加载应用环境变量；不要把
+Compose 专用的 `AIRESEARCHER_DB_ROOT_PASSWORD` 传给应用。
 
 启动 Agent API（终端 1）：
 

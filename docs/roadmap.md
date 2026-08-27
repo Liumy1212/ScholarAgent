@@ -20,7 +20,7 @@ v0.1 的唯一核心闭环是：
 
 ## 2. 当前状态
 
-M0～M3 的单篇论文纵向切片已经实现，M4 正在进行真实环境验收：
+M0～M3 的单篇论文纵向切片已经实现，M4 的本地真实环境 Demo 验收已经通过；发布加固与 CI 仍在后续范围内：
 
 ```text
 React → Java BFF → Python Agent → MySQL / PyMuPDF / BGE-M3 / Qdrant
@@ -35,12 +35,21 @@ React → Java BFF → Python Agent → MySQL / PyMuPDF / BGE-M3 / Qdrant
 - Spring MVC BFF 的论文/PDF/SSE 代理、请求追踪、取消、错误映射和 PDF Range 语义。
 - React 上传/入库状态/重试/删除/原生 PDF 预览，以及 Tool 状态、流式正文和可跳页引用。
 - `FakeChatProvider` 仅保留为无外部依赖的契约测试替身，不参与默认运行时。
+- Docker Compose MySQL 8.4 与 Qdrant 1.19、named volume 持久化、Alembic 迁移和完整启动/回退说明。
 
-当前待完成：
+本地验收已经确认：
 
-- 在真实本机服务与浏览器中完成运行时生成 PDF 的完整验收，保存 DeepSeek Tool Call、Qdrant 召回、本地 Rerank、SSE 和引用跳页的明确证据。
-- 重跑 contracts、frontend、backend、agent 全量自动门禁和敏感文件检查。
-- 后续独立任务再建设可重复 CI；它不是本地 Demo 闭环的运行时依赖。
+- 从 Web 上传运行时生成的两页中英文文本 PDF，Worker 完成解析、BGE-M3 embedding、Qdrant 写入并将论文置为 `READY`。
+- 浏览器原生预览与 PDF Range 请求有效；DeepSeek 实际调用 `knowledge_base_search`，Qdrant 召回和本地 Rerank 后通过 SSE 返回答案，引用可跳转到正确页码。
+- `document_lookup` 元数据问题和不调用工具的普通问题均完成真实 DeepSeek 冒烟。
+- MySQL 容器重启后仍保持 Alembic head、论文、任务和 chunk，证明 named volume 持久化有效。
+- contracts、frontend、backend、agent 全量自动门禁、敏感文件检查和 `git diff --check` 已通过。
+
+M4 后续工作：
+
+- 继续补齐尚未覆盖的失败组合、运行可观测性和面向日常使用的恢复操作。
+- 在独立任务中建设可重复 CI；CI 不是本地 Demo 闭环的运行时依赖。
+- 完成发布复核后再标记 `v0.1.0`，不得仅依据一次本地验收提前发布。
 
 ## 3. M0：关闭 Phase 0 基线
 

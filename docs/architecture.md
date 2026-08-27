@@ -59,7 +59,7 @@ v0.1 由 MySQL 中的持久任务表和租约驱动轻量 Python Worker，不依
 
 ## 3. 数据边界
 
-`infrastructure/` 只提交启动配置、`.env.example`、健康检查与操作说明。运行数据使用 Docker Named Volume 或本机仓库外目录。
+`infrastructure/` 只提交启动配置、`.env.example`、健康检查与操作说明。开发 MySQL 与 Qdrant 默认由 Docker Compose 启动，数据使用 Docker named volume；PDF 和模型缓存使用宿主机上的仓库外目录。
 
 允许提交：
 
