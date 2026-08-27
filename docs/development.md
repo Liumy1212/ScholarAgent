@@ -9,7 +9,7 @@
 | frontend | Node.js 22.13+、pnpm 11、React 19、Vite 7、TypeScript |
 | backend | Java 21、Spring Boot 4、Maven Wrapper |
 | agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
-| infrastructure | 本机现有 MySQL + Docker Compose Qdrant；不使用 Redis |
+| infrastructure | Docker Compose MySQL 8.4 + Qdrant 1.19；不使用 Redis |
 
 仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
 
@@ -17,27 +17,78 @@
 
 v0.1 单篇论文 Demo 的真实纵向切片已经实现：React 只调用 Java BFF，Java 转发到 Python Agent；Python 使用 MySQL、PyMuPDF、真实 BGE 模型、Qdrant、DeepSeek 原生 Tool Calling 和 SSE。`FakeChatProvider` 仅供不依赖外部服务的测试使用。
 
-真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值，应用不会自动加载 `.env`；启动 API 与 Worker 前，应在各自父 shell 中设置真实环境变量。
+真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值；复制得到的 `.env`
+由 Compose 通过 `--env-file` 读取，但应用不会自动加载它。启动 Alembic、Agent API 与 Worker
+前，应在各自父 shell 中无回显地加载应用变量，并排除 Compose 专用的
+`AIRESEARCHER_DB_ROOT_PASSWORD`。完整命令和回退方式见
+[Infrastructure](../infrastructure/README.md)。
 
-本机启动顺序：
+本地启动顺序固定为：MySQL/Qdrant 健康 → Alembic → Agent API/Worker → Java BFF → React。
+以下 `$DockerCli` 按 Infrastructure 文档在当前基础设施终端中定位，不要求修改全局 `PATH`。
 
 ```powershell
-# 1. 安装 Agent 并启动 Qdrant；MySQL 使用本机已有实例
+# 1. 从仓库根目录安装 Agent
 conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
-docker compose -f .\infrastructure\compose.yaml up -d qdrant
 
-# 2. 更新 MySQL schema
+# 2. 启动容器化 MySQL 与 Qdrant
+& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml config --quiet
+& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql qdrant
+& $DockerCli compose --env-file .\.env -f .\infrastructure\compose.yaml ps
+Invoke-WebRequest http://127.0.0.1:6333/healthz -UseBasicParsing
+```
+
+在运行 Alembic、Agent API 或 Worker 的每个父 PowerShell 中，先从仓库根目录执行以下代码块。
+它不会回显值，也不会加载 MySQL root 密码：
+
+```powershell
+Get-Content -LiteralPath .\.env | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+        $name = $Matches[1]
+        $value = $Matches[2]
+        if ($name -ne 'AIRESEARCHER_DB_ROOT_PASSWORD') {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+}
+```
+
+MySQL 显示为 `healthy` 后更新 schema：
+
+```powershell
 Set-Location .\agent
 conda run -n airesearcher-agent alembic upgrade head
+conda run -n airesearcher-agent alembic current
 Set-Location ..
+```
 
-# 3. 分别在四个终端启动 Agent API、Worker、Java BFF 与 React
+随后分别启动应用。Agent API（终端 1）：
+
+```powershell
 conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000
-conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
+```
 
+Worker（终端 2）：
+
+```powershell
+conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
+```
+
+Java BFF（终端 3）：
+
+Java 不需要数据库变量；默认连接 `http://localhost:8000`。如需覆盖，只向该终端设置
+`AIRESEARCHER_AGENT_*` 变量。
+
+```powershell
 Set-Location .\backend
 .\mvnw.cmd spring-boot:run
+```
 
+React（终端 4）：
+
+React 不需要数据库变量；默认代理到 `http://localhost:8080`。如需覆盖，只向该终端设置
+`VITE_API_PROXY_TARGET`。
+
+```powershell
 Set-Location .\frontend
 pnpm dev
 ```

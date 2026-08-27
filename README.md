@@ -6,6 +6,8 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 
 v0.1 单篇论文 Demo 纵向切片已经落地：React 只经 Java BFF 调用 Python Agent，支持文本型 PDF 上传、后台建库、浏览器原生预览、DeepSeek 原生 Tool Calling、Qdrant 检索、本地 Rerank、SSE 回答和页码引用。`FakeChatProvider` 只保留在无外部依赖的测试中，不是默认运行时。
 
+本地开发默认通过 Docker Compose 运行 MySQL 8.4 与 Qdrant 1.19，不依赖宿主机 MySQL 服务；数据库和向量数据保存在仓库外的 Docker named volume 中。
+
 v0.1 的核心目标不是一次铺开所有科研自动化能力，而是完成一条可以真实使用的闭环：
 
 ```text
@@ -59,7 +61,7 @@ flowchart LR
 
 v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR、多知识库、Redis Streams、LangGraph、研究工作区和论文写作均延后。
 
-本机启动顺序、环境变量和全量检查见 [开发环境说明](docs/development.md)；Qdrant 配置见 [Infrastructure](infrastructure/README.md)。
+本地开发启动顺序、环境变量和全量检查见 [开发环境说明](docs/development.md)；MySQL 与 Qdrant 的 Compose 配置、持久化和回退方式见 [Infrastructure](infrastructure/README.md)。
 
 详细内容见 [路线图](docs/roadmap.md)。
 

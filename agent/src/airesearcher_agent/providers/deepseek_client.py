@@ -75,7 +75,11 @@ class DeepSeekGateway(Protocol):
         tools: list[ToolDefinition],
     ) -> AssistantTurn: ...
 
-    def stream_final(self, messages: list[ChatMessage]) -> AsyncIterator[str]: ...
+    def stream_final(
+        self,
+        messages: list[ChatMessage],
+        tools: list[ToolDefinition],
+    ) -> AsyncIterator[str]: ...
 
 
 class DeepSeekHttpClient:
@@ -133,10 +137,16 @@ class DeepSeekHttpClient:
                 retryable=True,
             ) from error
 
-    async def stream_final(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
+    async def stream_final(
+        self,
+        messages: list[ChatMessage],
+        tools: list[ToolDefinition],
+    ) -> AsyncIterator[str]:
         payload = {
             "model": self._model,
             "messages": messages,
+            "tools": tools,
+            "tool_choice": "none",
             "stream": True,
         }
         try:
