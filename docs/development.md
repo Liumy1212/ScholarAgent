@@ -9,7 +9,7 @@
 | frontend | Node.js 22.13+、pnpm 11、React 19、Vite 7、TypeScript |
 | backend | Java 21、Spring Boot 4、Maven Wrapper |
 | agent | Python 3.12、独立 Conda 环境 `airesearcher-agent` |
-| infrastructure | 本机现有 MySQL + Docker Compose Qdrant；不使用 Redis |
+| infrastructure | Docker Compose MySQL 8.4 + Qdrant 1.19；不使用 Redis |
 
 仓库任务不得顺带安装全局工具、修改 `PATH` 或改变 Conda `base`。Java 使用 Maven Wrapper；Python 使用独立环境；前端以仓库锁文件为准。
 
@@ -17,21 +17,38 @@
 
 v0.1 单篇论文 Demo 的真实纵向切片已经实现：React 只调用 Java BFF，Java 转发到 Python Agent；Python 使用 MySQL、PyMuPDF、真实 BGE 模型、Qdrant、DeepSeek 原生 Tool Calling 和 SSE。`FakeChatProvider` 仅供不依赖外部服务的测试使用。
 
-真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值，应用不会自动加载 `.env`；启动 API 与 Worker 前，应在各自父 shell 中设置真实环境变量。
+真实运行数据必须位于仓库外。根目录 `.env.example` 只是键名和占位值；复制得到的 `.env`
+由 Compose 通过 `--env-file` 读取，但应用不会自动加载它。启动 Alembic、API 与 Worker 前，应在
+各自父 shell 中无回显地加载应用变量，并排除 Compose 专用的
+`AIRESEARCHER_DB_ROOT_PASSWORD`。完整命令和回退方式见
+[Infrastructure](../infrastructure/README.md)。
 
 本机启动顺序：
 
 ```powershell
-# 1. 安装 Agent 并启动 Qdrant；MySQL 使用本机已有实例
+# 1. 安装 Agent，并启动容器化 MySQL 与 Qdrant
 conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
-docker compose -f .\infrastructure\compose.yaml up -d qdrant
+docker compose --env-file .\.env -f .\infrastructure\compose.yaml config --quiet
+docker compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql qdrant
+docker compose --env-file .\.env -f .\infrastructure\compose.yaml ps
 
-# 2. 更新 MySQL schema
+# 2. 在当前 PowerShell 中加载应用变量；不加载 MySQL root 密码
+Get-Content -LiteralPath .\.env | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+        $name = $Matches[1]
+        $value = $Matches[2]
+        if ($name -ne 'AIRESEARCHER_DB_ROOT_PASSWORD') {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+}
+
+# 3. MySQL healthy 后更新 schema
 Set-Location .\agent
 conda run -n airesearcher-agent alembic upgrade head
 Set-Location ..
 
-# 3. 分别在四个终端启动 Agent API、Worker、Java BFF 与 React
+# 4. 分别在四个已加载所需变量的终端启动 Agent API、Worker、Java BFF 与 React
 conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000
 conda run -n airesearcher-agent python -m airesearcher_agent.worker.main
 

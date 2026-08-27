@@ -1,6 +1,27 @@
 name: airesearcher-demo
 
 services:
+  mysql:
+    image: mysql:8.4.11
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_DATABASE: "${AIRESEARCHER_DB_NAME:-airesearcher_agent}"
+      MYSQL_USER: "${AIRESEARCHER_DB_USER:-airesearcher}"
+      MYSQL_PASSWORD: "${AIRESEARCHER_DB_PASSWORD:?Set AIRESEARCHER_DB_PASSWORD}"
+      MYSQL_ROOT_PASSWORD: "${AIRESEARCHER_DB_ROOT_PASSWORD:?Set AIRESEARCHER_DB_ROOT_PASSWORD}"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    volumes:
+      - mysql_data:/var/lib/mysql
+
   qdrant:
     image: qdrant/qdrant:v1.19.0
     ports:
@@ -10,5 +31,7 @@ services:
       - qdrant_data:/qdrant/storage
 
 volumes:
+  mysql_data:
+    name: airesearcher_mysql_data
   qdrant_data:
     name: airesearcher_qdrant_data

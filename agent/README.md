@@ -16,16 +16,20 @@ AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 Deep
 
 ## 配置与数据边界
 
-所有设置从进程环境读取。根目录 [`.env.example`](../.env.example) 只列键名和占位值，应用不会自动读取 `.env`。至少要设置 DeepSeek、MySQL、Qdrant 和外部存储目录变量。
+所有设置从进程环境读取。根目录 [`.env.example`](../.env.example) 只列键名和占位值，应用不会自动读取 `.env`。至少要设置 DeepSeek、MySQL、Qdrant 和外部存储目录变量。`AIRESEARCHER_DB_ROOT_PASSWORD` 只供 Compose 初始化 MySQL，Agent 和 Alembic 始终使用应用账户。
 
 `AIRESEARCHER_STORAGE_DIR` 与 `AIRESEARCHER_MODEL_CACHE_DIR` 必须位于仓库外；应用会拒绝仓库内路径。PDF、模型、缓存、数据库、向量和日志不得提交。
 
 ## 安装、迁移与启动
 
-从仓库根目录使用隔离环境，不修改 Conda `base`：
+从仓库根目录使用隔离环境，不修改 Conda `base`。先按
+[Infrastructure](../infrastructure/README.md) 创建未跟踪的 `.env`、启动 MySQL，并在当前
+PowerShell 中加载应用变量；等待 MySQL 显示为 `healthy` 后再运行迁移：
 
 ```powershell
 conda run -n airesearcher-agent python -m pip install -e ".\agent[dev]"
+docker compose --env-file .\.env -f .\infrastructure\compose.yaml up -d mysql
+docker compose --env-file .\.env -f .\infrastructure\compose.yaml ps mysql
 
 Set-Location .\agent
 conda run -n airesearcher-agent alembic upgrade head

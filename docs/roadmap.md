@@ -151,7 +151,7 @@ Agent 路径：
 1. 完成无文本 PDF、加密或损坏 PDF、重复上传、Worker 中断、MySQL/Qdrant/LLM 不可用、工具失败和 SSE 中断的用户可见状态。
 2. 完成 Agent 运行和入库任务的超时、取消、重试、日志关联和请求追踪。
 3. 使用运行时生成的合成 PDF 建立三端端到端测试，不向仓库提交真实或测试 PDF 文件。
-4. 提供使用本机现有 MySQL 启动 Qdrant、Python API/Worker、Java 和 React 的说明，以及 DeepSeek 冒烟步骤。
+4. 提供使用 Docker Compose MySQL 与 Qdrant 启动 Python API/Worker、Java 和 React 的说明，以及 DeepSeek 冒烟步骤。
 5. 接入 CI，并执行契约、单元、集成、端到端和敏感文件门禁。
 
 发布验收：

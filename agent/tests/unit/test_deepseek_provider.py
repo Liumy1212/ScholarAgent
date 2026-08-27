@@ -1,10 +1,13 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
+import pytest
 from tests.support import runtime_settings, sqlite_database
 
+from airesearcher_agent.application.ports import ChatProviderError
 from airesearcher_agent.application.runs import AgentRunStore
 from airesearcher_agent.domain.chat import (
     AnswerCompleted,
@@ -66,9 +69,14 @@ class ScriptedGateway:
             return AssistantTurn()
         return self._turns.pop(0)
 
-    async def stream_final(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
+    async def stream_final(
+        self,
+        messages: list[ChatMessage],
+        tools: list[ToolDefinition],
+    ) -> AsyncIterator[str]:
         self.final_messages = list(messages)
         self.final_message_calls.append(list(messages))
+        self.tool_definitions.append(list(tools))
         fragments = (
             self._repair_fragments
             if len(self.final_message_calls) > 1 and self._repair_fragments is not None
@@ -256,9 +264,9 @@ def test_document_information_question_uses_document_lookup(tmp_path: Path) -> N
     gateway = ScriptedGateway(
         [
             AssistantTurn(tool_calls=[_tool_call("document_lookup", '{"query":"Grounded Paper"}')]),
-            AssistantTurn(),
+            AssistantTurn(content="The paper was published in 2026."),
         ],
-        ["The paper was published in 2026."],
+        ["This fallback must not replace the completed assistant turn."],
     )
     tools = RecordingRetrievalTools()
     provider, _database = _provider(tmp_path, gateway, tools)
@@ -266,14 +274,26 @@ def test_document_information_question_uses_document_lookup(tmp_path: Path) -> N
     events = asyncio.run(_collect(provider, _prompt("run-document-lookup")))
 
     assert len(tools.lookup_calls) == 1
+    assert tools.lookup_calls[0].query == "paper-ready"
     assert tools.search_calls == []
+    request_payload = json.loads(cast(str, gateway.complete_messages[0][1]["content"]))
+    assert request_payload == {
+        "question": "论文中的关键实验结果是什么？",
+        "selectedPaperIds": ["paper-ready"],
+    }
+    answer = "".join(event.delta for event in events if isinstance(event, MessageDelta))
+    assert answer == "The paper was published in 2026."
+    assert gateway.final_message_calls == []
     assert [event.answer_mode for event in events if isinstance(event, AnswerCompleted)] == [
         "DOCUMENT_LOOKUP"
     ]
 
 
 def test_general_question_can_complete_without_any_tool(tmp_path: Path) -> None:
-    gateway = ScriptedGateway([AssistantTurn()], ["A general model-knowledge answer."])
+    gateway = ScriptedGateway(
+        [AssistantTurn(content="A general model-knowledge answer.")],
+        ["This fallback must not replace the completed assistant turn."],
+    )
     tools = RecordingRetrievalTools()
     provider, _database = _provider(tmp_path, gateway, tools)
 
@@ -282,9 +302,33 @@ def test_general_question_can_complete_without_any_tool(tmp_path: Path) -> None:
     assert tools.search_calls == []
     assert tools.lookup_calls == []
     assert not any(isinstance(event, ToolStatus) for event in events)
+    answer = "".join(event.delta for event in events if isinstance(event, MessageDelta))
+    assert answer == "A general model-knowledge answer."
+    assert gateway.final_message_calls == []
     assert [event.answer_mode for event in events if isinstance(event, AnswerCompleted)] == [
         "MODEL_KNOWLEDGE"
     ]
+
+
+def test_raw_dsml_tool_markup_is_never_exposed_as_an_answer(tmp_path: Path) -> None:
+    fullwidth_bar = "\uff5c"
+    markup = (
+        f"<{fullwidth_bar * 2}DSML{fullwidth_bar * 2}tool_calls>"
+        f'<{fullwidth_bar * 2}DSML{fullwidth_bar * 2}invoke name="document_lookup">'
+    )
+    gateway = ScriptedGateway([AssistantTurn(content=markup)], [markup])
+    tools = RecordingRetrievalTools()
+    provider, raw_database = _provider(tmp_path, gateway, tools)
+
+    with pytest.raises(ChatProviderError) as captured:
+        asyncio.run(_collect(provider, _prompt("run-dsml-markup")))
+    assert captured.value.code == "PROVIDER_PROTOCOL_ERROR"
+
+    with raw_database.session() as session:
+        run = session.get(AgentRunRecord, "run-dsml-markup")
+        assert run is not None
+        assert run.status == "FAILED"
+        assert run.error_code == "PROVIDER_PROTOCOL_ERROR"
 
 
 def test_invalid_tool_arguments_emit_safe_failure_status(tmp_path: Path) -> None:

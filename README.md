@@ -59,7 +59,7 @@ flowchart LR
 
 v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR、多知识库、Redis Streams、LangGraph、研究工作区和论文写作均延后。
 
-本机启动顺序、环境变量和全量检查见 [开发环境说明](docs/development.md)；Qdrant 配置见 [Infrastructure](infrastructure/README.md)。
+本机启动顺序、环境变量和全量检查见 [开发环境说明](docs/development.md)；MySQL 与 Qdrant 的 Compose 配置见 [Infrastructure](infrastructure/README.md)。
 
 详细内容见 [路线图](docs/roadmap.md)。
 
