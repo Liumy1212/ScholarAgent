@@ -5,13 +5,13 @@ AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 Deep
 
 ## 当前能力
 
-- 单 PDF 上传、SHA-256 去重、列表、详情、删除和支持 Range 的文件读取。
+- 本地论文原件库、单 PDF 上传、手动后台扫描、SHA-256 去重、排除/恢复和支持 Range 的文件读取。
 - MySQL 持久任务、租约 Worker、PyMuPDF 按页切片和失败重试。
 - `BAAI/bge-m3` embedding、Qdrant 检索与 `BAAI/bge-reranker-v2-m3` 本地重排。
 - DeepSeek 原生 Tool Calling、只读工具白名单、SSE、引用校验及 Run/消息/引用持久化。
 
-`FakeChatProvider` 仅用于无外部依赖测试，不参与默认运行时。PDF、模型、缓存、数据库、向量、
-日志和密钥必须保存在 Git 之外；运行目录边界由配置校验强制执行。
+`FakeChatProvider` 仅用于无外部依赖测试，不参与默认运行时。PDF 只允许保存在被 Git 忽略的
+`.private/paper-library/`，模型缓存必须位于仓库外；数据库、向量、日志和密钥不得进入 Git。
 
 ## 运行与检查
 

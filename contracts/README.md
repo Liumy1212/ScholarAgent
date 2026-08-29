@@ -1,6 +1,6 @@
 # Contracts
 
-AIResearcher 单篇论文 Demo 三端共享的机器可读接口契约。
+AIResearcher 本地论文原件库与问答闭环的三端共享机器可读接口契约。
 
 | 路径 | 使用关系 |
 | --- | --- |
@@ -19,6 +19,9 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` 会校验两个 OpenAPI 文档、论文与入库任务路径、REST DTO 跨 BFF 一致性、`Result<T>`/PDF/SSE 边界、Range 响应头、全部 `*.schema.json`、每种事件的合法示例、`StreamOpenError` 示例、完整成功/失败 SSE 流，并确认非法事件和非法流确实被拒绝。
+`npm run validate` 会校验两个 OpenAPI 文档、原件库扫描/论文排除/入库任务路径、分页与冲突
+语义、REST DTO 跨 BFF 一致性、`Result<T>`/PDF/SSE 边界、Range 响应头、全部
+`*.schema.json`、每种事件的合法示例、`StreamOpenError` 示例、完整成功/失败 SSE 流，并确认
+非法事件和非法流确实被拒绝。
 
 所有修改必须遵守本目录的 `AGENTS.md`。

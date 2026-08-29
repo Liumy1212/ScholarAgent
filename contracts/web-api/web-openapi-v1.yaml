@@ -13,10 +13,99 @@ externalDocs:
   description: SSE v1 线协议与生命周期规则
   url: ../sse/v1/README.md
 tags:
+  - name: Library
   - name: Papers
   - name: Ingestion jobs
   - name: Conversations
 paths:
+  /api/v1/library:
+    get:
+      tags: [Library]
+      operationId: getWebLibrary
+      summary: 获取本地论文原件库状态
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryResultResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/library/scans:
+    post:
+      tags: [Library]
+      operationId: createWebLibraryScan
+      summary: 创建一次后台原件库扫描
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '202':
+          $ref: '#/components/responses/LibraryScanAcceptedResponse'
+        '409':
+          description: 已有活动扫描；错误 code 固定为 LIBRARY_SCAN_ACTIVE。
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultError'
+              example:
+                code: LIBRARY_SCAN_ACTIVE
+                message: 原件库扫描正在进行。
+                requestId: req-library-scan-001
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/library/scans/{scanId}:
+    get:
+      tags: [Library]
+      operationId: getWebLibraryScan
+      summary: 获取原件库扫描任务
+      parameters:
+        - $ref: '#/components/parameters/ScanId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryScanResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/library/scans/{scanId}/items:
+    get:
+      tags: [Library]
+      operationId: listWebLibraryScanItems
+      summary: 分页获取扫描文件结果
+      parameters:
+        - $ref: '#/components/parameters/ScanId'
+        - $ref: '#/components/parameters/ScanItemsOffset'
+        - $ref: '#/components/parameters/ScanItemsLimit'
+        - $ref: '#/components/parameters/ScanItemOutcomeFilter'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryScanItemsResultResponse'
+        '400':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
   /api/v1/papers:
     post:
       tags: [Papers]
@@ -61,7 +150,10 @@ paths:
                     publicationYear: 2026
                     fileName: synthetic-demo.pdf
                     fileSizeBytes: 4096
+                    libraryRelativePath: synthetic-demo.pdf
+                    sourceStatus: AVAILABLE
                     status: PROCESSING
+                    searchable: false
                     pageCount: null
                     createdAt: '2026-01-01T00:00:00Z'
                     updatedAt: '2026-01-01T00:00:00Z'
@@ -141,23 +233,37 @@ paths:
           $ref: '#/components/responses/JsonErrorResponse'
         '504':
           $ref: '#/components/responses/JsonErrorResponse'
-    delete:
+  /api/v1/papers/{paperId}/exclusion:
+    post:
       tags: [Papers]
-      operationId: deleteWebPaper
-      summary: 删除论文、当前文件、chunk 与向量
+      operationId: excludeWebPaper
+      summary: 将论文移出知识库但保留原件
       parameters:
         - $ref: '#/components/parameters/PaperId'
         - $ref: '#/components/parameters/OptionalRequestId'
       responses:
         '200':
-          description: 删除完成。
-          headers:
-            X-Request-Id:
-              $ref: '#/components/headers/XRequestId'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DeletePaperResult'
+          $ref: '#/components/responses/PaperResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '409':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+    delete:
+      tags: [Papers]
+      operationId: restoreWebPaper
+      summary: 重新加入原件可用的已排除论文
+      parameters:
+        - $ref: '#/components/parameters/PaperId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/PaperResultResponse'
         '404':
           $ref: '#/components/responses/JsonErrorResponse'
         '409':
@@ -299,6 +405,35 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/Identifier'
+    ScanId:
+      name: scanId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ScanItemsOffset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    ScanItemsLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 100
+    ScanItemOutcomeFilter:
+      name: outcome
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/LibraryScanItemOutcome'
     OptionalRequestId:
       name: X-Request-Id
       in: header
@@ -358,7 +493,18 @@ components:
       maxLength: 128
     PaperStatus:
       type: string
-      enum: [PROCESSING, READY, FAILED]
+      enum: [PROCESSING, READY, FAILED, EXCLUDED]
+    PaperSourceStatus:
+      type: string
+      enum: [AVAILABLE, MISSING, REPLACED]
+    LibraryScanStatus:
+      type: string
+      description: 单个文件失败时任务仍可 SUCCEEDED，并通过 failedCount 和扫描项报告部分失败。
+      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED]
+    LibraryScanItemOutcome:
+      type: string
+      description: 每个被发现路径的独立处理结果。
+      enum: [REGISTERED, UNCHANGED, MOVED, DUPLICATE, EXCLUDED, SKIPPED, FAILED]
     IngestionJobStatus:
       type: string
       enum: [QUEUED, RUNNING, SUCCEEDED, FAILED]
@@ -413,7 +559,10 @@ components:
         - publicationYear
         - fileName
         - fileSizeBytes
+        - libraryRelativePath
+        - sourceStatus
         - status
+        - searchable
         - pageCount
         - createdAt
         - updatedAt
@@ -443,8 +592,18 @@ components:
           type: integer
           minimum: 1
           maximum: 52428800
+        libraryRelativePath:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: 相对 originals 目录的正斜杠路径；不得是绝对路径或包含路径穿越。
+        sourceStatus:
+          $ref: '#/components/schemas/PaperSourceStatus'
         status:
           $ref: '#/components/schemas/PaperStatus'
+        searchable:
+          type: boolean
+          description: 仅 READY 且 AVAILABLE 且未排除时为 true。
         pageCount:
           type: [integer, 'null']
           minimum: 1
@@ -525,15 +684,118 @@ components:
         total:
           type: integer
           minimum: 0
-    DeletePaperData:
+    LibraryScanFailure:
       type: object
       additionalProperties: false
-      required: [paperId, deleted]
+      required: [code, message]
       properties:
-        paperId:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2048
+    LibraryScan:
+      type: object
+      additionalProperties: false
+      required:
+        - scanId
+        - status
+        - discoveredCount
+        - registeredCount
+        - unchangedCount
+        - duplicateCount
+        - excludedCount
+        - skippedCount
+        - failedCount
+        - createdAt
+        - startedAt
+        - completedAt
+        - failure
+      properties:
+        scanId:
           $ref: '#/components/schemas/Identifier'
-        deleted:
-          const: true
+        status:
+          $ref: '#/components/schemas/LibraryScanStatus'
+        discoveredCount: { type: integer, minimum: 0 }
+        registeredCount: { type: integer, minimum: 0 }
+        unchangedCount: { type: integer, minimum: 0 }
+        duplicateCount: { type: integer, minimum: 0 }
+        excludedCount: { type: integer, minimum: 0 }
+        skippedCount: { type: integer, minimum: 0 }
+        failedCount: { type: integer, minimum: 0 }
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        failure:
+          oneOf:
+            - $ref: '#/components/schemas/LibraryScanFailure'
+            - type: 'null'
+    LibraryInfo:
+      type: object
+      additionalProperties: false
+      required: [rootPath, supportedExtensions, scanInProgress, latestScan]
+      properties:
+        rootPath:
+          type: string
+          minLength: 1
+          description: Agent 解析后的本机原件库绝对路径，仅用于本地用户管理文件。
+        supportedExtensions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: ['.pdf']
+        scanInProgress:
+          type: boolean
+        latestScan:
+          oneOf:
+            - $ref: '#/components/schemas/LibraryScan'
+            - type: 'null'
+    LibraryScanItem:
+      type: object
+      additionalProperties: false
+      required: [relativePath, outcome, paperId, code, message]
+      properties:
+        relativePath:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        outcome:
+          $ref: '#/components/schemas/LibraryScanItemOutcome'
+        paperId:
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+        code:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 128
+        message:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 2048
+    LibraryScanItemsPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/LibraryScanItem'
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
     SuccessResultBase:
       type: object
       required: [code, message, requestId]
@@ -581,14 +843,32 @@ components:
             data:
               $ref: '#/components/schemas/IngestionJob'
       unevaluatedProperties: false
-    DeletePaperResult:
+    LibraryResult:
       allOf:
         - $ref: '#/components/schemas/SuccessResultBase'
         - type: object
           required: [data]
           properties:
             data:
-              $ref: '#/components/schemas/DeletePaperData'
+              $ref: '#/components/schemas/LibraryInfo'
+      unevaluatedProperties: false
+    LibraryScanResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LibraryScan'
+      unevaluatedProperties: false
+    LibraryScanItemsResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LibraryScanItemsPage'
       unevaluatedProperties: false
     ResultError:
       type: object
@@ -647,6 +927,83 @@ components:
     StreamOpenError:
       $ref: ../sse/v1/stream-open-error.schema.json
   responses:
+    LibraryResultResponse:
+      description: 本地论文原件库状态 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryResult'
+          example:
+            code: SUCCESS
+            message: Success.
+            requestId: req-library-001
+            data:
+              rootPath: 'D:/AIResearcher/.private/paper-library'
+              supportedExtensions: ['.pdf']
+              scanInProgress: false
+              latestScan: null
+    LibraryScanAcceptedResponse:
+      description: 原件库扫描任务已排队 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryScanResult'
+          example:
+            code: SUCCESS
+            message: Success.
+            requestId: req-library-scan-001
+            data:
+              scanId: scan-demo-001
+              status: QUEUED
+              discoveredCount: 0
+              registeredCount: 0
+              unchangedCount: 0
+              duplicateCount: 0
+              excludedCount: 0
+              skippedCount: 0
+              failedCount: 0
+              createdAt: '2026-08-29T00:00:00Z'
+              startedAt: null
+              completedAt: null
+              failure: null
+    LibraryScanResultResponse:
+      description: 原件库扫描任务详情 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryScanResult'
+    LibraryScanItemsResultResponse:
+      description: 分页扫描文件结果 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryScanItemsResult'
+          example:
+            code: SUCCESS
+            message: Success.
+            requestId: req-library-scan-items-001
+            data:
+              items:
+                - relativePath: topic/synthetic-demo.pdf
+                  outcome: REGISTERED
+                  paperId: paper-demo-001
+                  code: null
+                  message: null
+              total: 1
+              offset: 0
+              limit: 100
     PaperResultResponse:
       description: 论文详情 Result。
       headers:

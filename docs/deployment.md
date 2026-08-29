@@ -63,7 +63,7 @@ Copy-Item .\.env.example .\.env
 | `DEEPSEEK_API_KEY` | 真实 DeepSeek API Key，不得保留模板占位符 |
 | `AIRESEARCHER_DB_PASSWORD` | MySQL 应用用户随机密码 |
 | `AIRESEARCHER_DB_ROOT_PASSWORD` | 与应用密码不同的 MySQL root 随机密码 |
-| `AIRESEARCHER_STORAGE_DIR` | 仓库外 PDF/上传目录 |
+| `AIRESEARCHER_PAPER_LIBRARY_DIR` | 本地论文原件库；默认 `./.private/paper-library` |
 | `AIRESEARCHER_MODEL_CACHE_DIR` | 仓库外模型缓存目录 |
 
 可以用以下命令生成密码，每执行一次生成一个新值：
@@ -75,7 +75,7 @@ Copy-Item .\.env.example .\.env
 Windows 路径建议写成正斜杠，例如：
 
 ```dotenv
-AIRESEARCHER_STORAGE_DIR=C:/Users/your-name/.airesearcher/storage
+AIRESEARCHER_PAPER_LIBRARY_DIR=./.private/paper-library
 AIRESEARCHER_MODEL_CACHE_DIR=C:/Users/your-name/.cache/airesearcher/models
 ```
 
@@ -128,8 +128,9 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8080/api/v1/papers
 ```
 
-最终在 Web 上传一篇文本型 PDF，等待状态进入 `READY`，再提出与论文相关的问题；正常情况
-下页面会显示检索、重排状态、流式回答和可跳转页码引用。
+最终把文本型 PDF 放入 `.private/paper-library/originals/` 并在 Web 点击“扫描原件库”（也可以
+直接从 Web 上传），等待状态进入 `READY + AVAILABLE`，再提出相关问题；页面会显示检索、
+重排状态、流式回答和可跳转页码引用。
 
 ## 5. 停止与数据位置
 
@@ -140,10 +141,38 @@ docker compose --env-file .\.env -f .\infrastructure\compose.yaml down
 ```
 
 `down` 不删除数据。MySQL 与 Qdrant 分别保存在 Docker named volume
-`airesearcher_mysql_data`、`airesearcher_qdrant_data`；PDF 与模型缓存在 `.env` 指定的仓库
-外目录。不要使用 `down --volumes`，除非明确要永久删除本机 Demo 数据。
+`airesearcher_mysql_data`、`airesearcher_qdrant_data`；论文原件位于
+`.private/paper-library/originals/`，模型缓存位于 `.env` 指定的仓库外目录。不要使用
+`down --volumes`，除非明确要永久删除本机 Demo 数据；停止和启动脚本不会删除论文原件。
 
-## 6. 常见问题
+## 6. 原件库管理与旧数据迁移
+
+原件库结构固定为：
+
+```text
+.private/paper-library/
+├─ originals/      可由用户按主题或年份建立子目录
+└─ .staging/       上传/下载过程临时文件，不参与扫描
+```
+
+首版只支持不超过 50 MB、500 页的文本型 PDF，并由用户在 Web 手动发起后台扫描。扫描会递归
+发现 `originals/` 中的 PDF，但跳过隐藏目录、临时文件、符号链接和 Windows reparse point。
+“移出知识库”保留原件，只清理 chunk 与 Qdrant 向量；“重新加入知识库”会重新创建入库任务。
+
+从使用 `AIRESEARCHER_STORAGE_DIR` 的旧版本升级时采用“重置并重新扫描”，不会自动搬迁或
+删除任何数据：
+
+1. 停止 Agent API、Worker、Java 和 React，并备份旧文件与数据库。
+2. 把需要保留的 PDF 复制到 `.private/paper-library/originals/`，不要删除旧 storage。
+3. 由用户显式重置旧 MySQL Agent 数据和 Qdrant collection；不要把此步骤加入启动脚本。
+4. 配置 `AIRESEARCHER_PAPER_LIBRARY_DIR`，执行新的 Alembic migration。
+5. 启动服务，在 Web 发起扫描并核对登记、失败和重复统计。
+6. 完成验收和备份确认后，再由用户自行决定是否清理旧 storage。
+
+> **警告：** MySQL/Qdrant 重置会永久删除既有索引与业务记录。项目不会提供自动执行或
+> 隐式触发的重置；具体命令必须在实现迁移发布时根据目标环境单独确认。
+
+## 7. 常见问题
 
 ### 脚本提示 API Key 仍是占位符
 
@@ -185,7 +214,7 @@ Get-NetTCPConnection -State Listen |
 检查 API Key、账户额度、`DEEPSEEK_BASE_URL` 和网络。模型调用失败不会自动切换到
 `FakeChatProvider`。
 
-## 7. 开发检查
+## 8. 开发检查
 
 契约、前端、Java 和 Agent 的完整检查命令，以及多 Chat/Worktree 协作规则，见
 [开发流程](development.md)。

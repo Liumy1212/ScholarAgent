@@ -19,8 +19,13 @@ const stableStreamFields = [
 ];
 const httpMethods = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const routeDefinitions = [
+  { suffix: "/library", methods: ["get"], kind: "json" },
+  { suffix: "/library/scans", methods: ["post"], kind: "json", successStatus: "202" },
+  { suffix: "/library/scans/{scanId}", methods: ["get"], kind: "json" },
+  { suffix: "/library/scans/{scanId}/items", methods: ["get"], kind: "json" },
   { suffix: "/papers", methods: ["get", "post"], kind: "json" },
-  { suffix: "/papers/{paperId}", methods: ["get", "delete"], kind: "json" },
+  { suffix: "/papers/{paperId}", methods: ["get"], kind: "json" },
+  { suffix: "/papers/{paperId}/exclusion", methods: ["post", "delete"], kind: "json" },
   { suffix: "/papers/{paperId}/file", methods: ["get"], kind: "pdf" },
   { suffix: "/ingestion-jobs/{jobId}", methods: ["get"], kind: "json" },
   { suffix: "/ingestion-jobs/{jobId}/retry", methods: ["post"], kind: "json" },
@@ -391,11 +396,11 @@ function assertResponseRequestIds(operation, sourceName) {
   }
 }
 
-function assertJsonOperation(operation, side, sourceName) {
-  const success = operation.responses["200"];
-  assert.ok(success, `${sourceName}: 普通 JSON operation 必须有 200 响应`);
+function assertJsonOperation(operation, side, sourceName, successStatus = "200") {
+  const success = operation.responses[successStatus];
+  assert.ok(success, `${sourceName}: 普通 JSON operation 必须有 ${successStatus} 响应`);
   const schema = responseSchema(success);
-  assert.ok(schema, `${sourceName}: 200 必须返回 application/json`);
+  assert.ok(schema, `${sourceName}: ${successStatus} 必须返回 application/json`);
   assert.equal(
     Object.hasOwn(success.content, "text/event-stream"),
     false,
@@ -410,7 +415,7 @@ function assertJsonOperation(operation, side, sourceName) {
   }
 
   for (const [status, response] of Object.entries(operation.responses)) {
-    if (status === "200") {
+    if (status === successStatus) {
       continue;
     }
     const errorSchema = responseSchema(response);
@@ -561,7 +566,7 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
       assertPathParameters(operation, pathName, operationName);
       assertResponseRequestIds(operation, operationName);
       if (route.kind === "json") {
-        assertJsonOperation(operation, side, operationName);
+        assertJsonOperation(operation, side, operationName, route.successStatus ?? "200");
       } else if (route.kind === "pdf") {
         assertPdfOperation(operation, operationName);
       } else {
@@ -578,6 +583,36 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
   assert.deepEqual(Object.keys(uploadSchema.properties), ["file"], `${sourceName}: 上传只能定义 file`);
   assert.equal(uploadSchema.properties.file.format, "binary", `${sourceName}: file 必须是 binary`);
 
+  const paperSchema = dereferenced.components.schemas.Paper;
+  assert.deepEqual(
+    paperSchema.properties.status.enum,
+    ["PROCESSING", "READY", "FAILED", "EXCLUDED"],
+    `${sourceName}: PaperStatus 必须包含 EXCLUDED`,
+  );
+  assert.deepEqual(
+    paperSchema.properties.sourceStatus.enum,
+    ["AVAILABLE", "MISSING", "REPLACED"],
+    `${sourceName}: sourceStatus 枚举不正确`,
+  );
+  for (const field of ["libraryRelativePath", "sourceStatus", "searchable"]) {
+    assert.ok(paperSchema.required.includes(field), `${sourceName}: Paper 必须要求 ${field}`);
+  }
+
+  const createScan = dereferenced.paths[`${prefix}/library/scans`].post;
+  assert.ok(createScan.responses["202"], `${sourceName}: 创建扫描必须返回 202`);
+  assert.equal(
+    createScan.responses["409"].content["application/json"].example.code,
+    "LIBRARY_SCAN_ACTIVE",
+    `${sourceName}: 活动扫描冲突错误码必须固定`,
+  );
+
+  const scanItems = dereferenced.paths[`${prefix}/library/scans/{scanId}/items`].get;
+  const queryNames = scanItems.parameters
+    .filter((parameter) => parameter.in === "query")
+    .map((parameter) => parameter.name)
+    .sort();
+  assert.deepEqual(queryNames, ["limit", "offset", "outcome"], `${sourceName}: 扫描项分页/过滤参数不完整`);
+
   validateInlineExamples(dereferenced, sourceName);
   return { parsed, dereferenced };
 }
@@ -591,12 +626,20 @@ async function validateOpenApis() {
   const commonSchemas = [
     "Identifier",
     "PaperStatus",
+    "PaperSourceStatus",
+    "LibraryScanStatus",
+    "LibraryScanItemOutcome",
     "IngestionJobStatus",
     "IngestionStage",
     "IngestionFailure",
     "IngestionSummary",
     "Paper",
     "IngestionJob",
+    "LibraryScanFailure",
+    "LibraryScan",
+    "LibraryInfo",
+    "LibraryScanItem",
+    "LibraryScanItemsPage",
     "ChatStreamRequest",
   ];
   for (const name of commonSchemas) {
@@ -616,11 +659,6 @@ async function validateOpenApis() {
     web.parsed.components.schemas.PaperListData,
     "论文列表 data DTO 必须跨 BFF 保持一致",
   );
-  assert.deepEqual(
-    agent.parsed.components.schemas.DeletePaperResponse,
-    web.parsed.components.schemas.DeletePaperData,
-    "删除 data DTO 必须跨 BFF 保持一致",
-  );
 }
 
 async function main() {
@@ -628,11 +666,11 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents with 7 Demo operations plus shared SSE");
+  console.log("- 2 OpenAPI documents with 13 REST operations plus shared SSE");
   console.log("- 2 JSON Schemas");
   console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");
-  console.log("- Agent/Web DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
+  console.log("- library scan/exclusion semantics, DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
 }
 
 main().catch((error) => {

@@ -26,7 +26,7 @@ SSE。`FakeChatProvider` 仅供无外部依赖测试使用。
 git status --short --branch
 git diff --check
 git ls-files
-git check-ignore -v --no-index .env .private/example.pdf agent/storage/example.db frontend/node_modules/example.js
+git check-ignore -v --no-index .env .private/paper-library/originals/example.pdf frontend/node_modules/example.js
 ```
 
 分应用检查：

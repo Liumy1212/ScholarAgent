@@ -38,7 +38,7 @@ flowchart LR
     Java -->|REST / SSE| Agent[Python Agent API]
     Agent --> MySQL[(MySQL)]
     Agent --> Qdrant[(Qdrant)]
-    Agent --> Files[PDF storage]
+    Agent --> Files[.private paper library]
     Worker[Python Worker] --> MySQL
     Worker --> Qdrant
 ```
@@ -47,7 +47,8 @@ flowchart LR
 - Java 负责 Web API、统一响应、校验、错误映射、请求追踪与 SSE 转发。
 - Python 负责论文和 AI 数据、解析、检索、Prompt、模型调用与后台任务，是这些数据的唯一事实来源。
 - v0.1 使用 MySQL 任务表驱动轻量 Worker，不引入 Redis Streams；Java 保持无业务持久化。
-- 数据库、PDF、向量、模型、密钥与日志均不得进入 Git。
+- PDF 原件统一保存在被 Git 忽略的 `.private/paper-library/originals/`，上传和未来 MCP
+  下载先进入 `.staging/`；数据库、PDF、向量、模型、密钥与日志均不得进入 Git。
 
 完整边界见 [架构说明](docs/architecture.md)。
 
@@ -76,8 +77,10 @@ v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR
 
 - [开发环境与多 Chat 工作流](docs/development.md)
 - 根目录及目标子目录中的 `AGENTS.md`
-- [ADR 0001：三应用边界](docs/adr/0001-application-boundaries.md)
+- [ADR 0002：本地论文原件库](docs/adr/0002-local-paper-library.md)
 
 ## 安全
 
-仓库只接收代码、配置模板、迁移、合成测试数据和公开文档。真实 PDF、研究数据、`.env`、凭据、数据库文件、向量数据、模型文件和运行日志必须保留在 Git 之外。
+仓库只接收代码、配置模板、迁移、合成测试数据和公开文档。真实 PDF 可以保存在仓库目录内
+受控且被忽略的 `.private/` 边界中，但不得进入 Git；研究数据、`.env`、凭据、数据库文件、
+向量数据、模型文件和运行日志同样不得提交。

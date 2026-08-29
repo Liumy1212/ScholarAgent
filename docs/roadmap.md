@@ -33,7 +33,7 @@ React → Java BFF → Python Agent → MySQL / PyMuPDF / BGE-M3 / Qdrant
 - FastAPI 论文 API、MySQL/Alembic、带租约 Worker、PyMuPDF 按页切块、真实 BGE embedding、Qdrant 和本地 Rerank。
 - DeepSeek `deepseek-v4-flash` 原生 Tool Calling、只读工具白名单、最多三轮、Run/Tool/引用快照持久化和引用校验。
 - Spring MVC BFF 的论文/PDF/SSE 代理、请求追踪、取消、错误映射和 PDF Range 语义。
-- React 上传/入库状态/重试/删除/原生 PDF 预览，以及 Tool 状态、流式正文和可跳页引用。
+- React 上传/入库状态/重试/原生 PDF 预览，以及 Tool 状态、流式正文和可跳页引用。
 - `FakeChatProvider` 仅保留为无外部依赖的契约测试替身，不参与默认运行时。
 - Docker Compose MySQL 8.4 与 Qdrant 1.19、named volume 持久化、Alembic 迁移和完整启动/回退说明。
 
@@ -75,25 +75,27 @@ M4 后续工作：
 
 交付：
 
-1. 在 Agent API 和 Web API 契约中先定义单文件上传、论文列表与详情、PDF 文件、删除、入库任务查询和失败重试。
+1. 在 Agent API 和 Web API 契约中定义单文件上传、原件库扫描、论文列表与详情、PDF 文件、排除/恢复、入库任务查询和失败重试。
 2. Java 只负责浏览器请求校验、DTO 转换、错误映射和 Agent API/文件流代理，不创建论文或任务数据库。
-3. Python 使用 MySQL 持久化 `Paper`、`IngestionJob` 和 `Chunk`；PDF 保存在配置指定的仓库外目录。
+3. Python 使用 MySQL 持久化 `Paper`、`IngestionJob`、`LibraryScanJob`、`LibraryScanItem` 和 `Chunk`；PDF 原件保存在被 Git 忽略的 `.private/paper-library/originals/`。
 4. Python Worker 使用 MySQL 任务表和租约领取任务，支持过期任务恢复、有限重试和幂等执行；v0.1 不使用 Redis Streams。
 5. 使用 SHA-256 去重、PyMuPDF 解析文本、按页切分 chunk、本地 embedding 和 Qdrant 建索引；chunk 不跨页，仅 `READY` 论文参与检索。
-6. Web 知识库页面展示论文、入库阶段、失败原因、重试和删除；详情页使用浏览器原生 PDF 预览，并支持 HTTP Range 转发。
+6. Web 知识库页面展示原件库、手动扫描、论文原件/索引状态、失败原因、重试和排除/恢复；详情页使用浏览器原生 PDF 预览，并支持 HTTP Range 转发。
 
 入库任务状态：
 
 - 任务状态：`QUEUED`、`RUNNING`、`SUCCEEDED`、`FAILED`。
 - 执行阶段：`PARSING`、`CHUNKING`、`EMBEDDING`、`INDEXING`。
-- 论文状态：`PROCESSING`、`READY`、`FAILED`。
+- 论文状态：`PROCESSING`、`READY`、`FAILED`、`EXCLUDED`。
+- 原件状态：`AVAILABLE`、`MISSING`、`REPLACED`。
+- 扫描状态：`QUEUED`、`RUNNING`、`SUCCEEDED`、`FAILED`。
 
 验收：
 
 - 上传一篇不超过 50 MB、500 页的文本型 PDF 后，Web 可观察任务从排队到 `READY`。
 - 解析失败不会产生可检索论文，并向用户展示稳定错误码和可操作说明。
 - 成功入库后可在站内预览 PDF；重复上传不会创建第二份论文或向量。
-- 删除论文会清理当前文件、记录和向量。
+- 移出知识库会保留原件和最小登记记录，清理 chunk 与向量；重新加入后创建新入库任务。
 
 ## 5. M2：可独立验证的 Retrieval 与 Rerank
 
@@ -111,7 +113,7 @@ M4 后续工作：
 
 - 使用运行时生成的中英文合成论文验证跨语言查询。
 - 固定查询可以验证向量召回和 Rerank 两个阶段，并确认最终证据顺序。
-- 每条证据都能回溯到真实论文、页码、chunk 和原文；删除或未就绪论文不会被返回。
+- 每条证据都能回溯到真实论文、页码、chunk 和原文；非 `READY + AVAILABLE` 或已排除论文不会被返回。
 
 ## 6. M3：真正的 Tool Calling Agent
 
@@ -182,7 +184,13 @@ POST   /papers
 GET    /papers
 GET    /papers/{paperId}
 GET    /papers/{paperId}/file
-DELETE /papers/{paperId}
+POST   /papers/{paperId}/exclusion
+DELETE /papers/{paperId}/exclusion
+
+GET    /library
+POST   /library/scans
+GET    /library/scans/{scanId}
+GET    /library/scans/{scanId}/items
 
 GET    /ingestion-jobs/{jobId}
 POST   /ingestion-jobs/{jobId}/retry
@@ -203,7 +211,7 @@ POST   /conversations/{conversationId}/messages/stream
 v0.1 固定为单用户、本地优先、单默认知识库。以下能力不进入 M0～M4：
 
 - 登录、租户、多用户授权和 Java 业务数据库。
-- 批量上传、OCR、arXiv 导入、人工笔记和自定义 PDF 阅读器。
+- OCR、多格式解析、目录监听、定时扫描、arXiv/MCP 导入实现、人工笔记和自定义 PDF 阅读器。
 - 多知识库、标签、元数据编辑和 READY 论文多选器。
 - 重新解析、全库重建、索引版本原子切换和零停机索引迁移。
 - Redis Streams、LangGraph、研究工作区、实验闭环和论文写作。

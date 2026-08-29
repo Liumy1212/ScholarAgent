@@ -27,7 +27,7 @@ flowchart LR
     React[React frontend] -->|REST / SSE| Java[Java BFF]
     Java -->|REST / SSE| Agent[Python Agent API]
     Agent --> MySQL[(Agent MySQL)]
-    Agent --> Files[PDF file storage]
+    Agent --> Files[.private paper library]
     Agent --> Qdrant[(Qdrant)]
     Agent --> DeepSeek[DeepSeek API]
     Worker[Python Worker] --> MySQL
@@ -59,7 +59,10 @@ v0.1 由 MySQL 中的持久任务表和租约驱动轻量 Python Worker，不依
 
 ## 3. 数据边界
 
-`infrastructure/` 只提交启动配置、`.env.example`、健康检查与操作说明。开发 MySQL 与 Qdrant 默认由 Docker Compose 启动，数据使用 Docker named volume；PDF 和模型缓存使用宿主机上的仓库外目录。
+`infrastructure/` 只提交启动配置、`.env.example`、健康检查与操作说明。开发 MySQL 与 Qdrant
+默认由 Docker Compose 启动，数据使用 Docker named volume；模型缓存使用仓库外目录。PDF
+原件使用受控例外目录 `.private/paper-library/originals/`，上传与下载临时文件使用同级
+`.staging/`，整个 `.private/` 必须被 Git 忽略。
 
 允许提交：
 
@@ -71,7 +74,7 @@ v0.1 由 MySQL 中的持久任务表和租约驱动轻量 Python Worker，不依
 禁止提交：
 
 - MySQL/Redis/Qdrant 数据。
-- PDF 和用户上传文件。
+- PDF、用户上传文件以及 `.private/` 内的任何运行数据。
 - API Key、密码、Token、`.env`。
 - 下载模型、缓存、日志和私有研究材料。
 
@@ -92,8 +95,8 @@ Python 使用 `airesearcher_agent` 数据库。Java 预留 `airesearcher_web`，
 
 v0.1 固定为单用户、本地优先、单默认知识库，并且只包含一条完整产品闭环：
 
-1. 单篇文本型 PDF 上传、SHA-256 去重、后台解析、按页 chunk、本地 embedding 和 Qdrant 建库。
-2. MySQL 持久任务表、轻量 Python Worker、入库状态、失败原因、重试和删除。
+1. 文本型 PDF 上传或放入本地原件库，手动创建后台扫描，SHA-256 去重、按页 chunk、本地 embedding 和 Qdrant 建库。
+2. MySQL 持久入库/扫描任务、轻量 Python Worker、状态、失败原因、重试，以及保留原件的排除/恢复。
 3. 论文列表、详情和浏览器原生 PDF 预览。
 4. `knowledge_base_search` 与 `document_lookup` 两个只读工具，以及本地 Rerank。
 5. DeepSeek `deepseek-v4-flash` Provider 和最多三轮的模型原生 Tool Calling；不实现问题分类器或兼容协议伪 Tool Calling。
@@ -102,17 +105,36 @@ v0.1 固定为单用户、本地优先、单默认知识库，并且只包含一
 以下能力明确不进入 v0.1：
 
 - 登录、租户、Java 业务持久化、多知识库和 READY 论文多选器。
-- 批量上传、OCR、元数据编辑、人工笔记、重新解析和全库重建索引。
+- OCR、多格式解析、目录监听、定时扫描、元数据编辑、人工笔记和全库重建索引。
 - 索引版本原子切换、Redis Streams 和 LangGraph。
 - AI 摘要、arXiv、研究工作区、创新评估、实验闭环和论文写作。
 
 ## 6. 关键约束
 
-- 仅 `READY` 论文可以参与检索。
+- 仅 `READY + AVAILABLE` 且 `searchable=true` 的论文可以参与检索。
 - chunk 不跨 PDF 页，检索证据必须能够回溯到 paper、page、quote 和 chunk。
-- 删除论文必须清理当前文件、记录和向量；历史引用保留标题、页码和 quote 快照并标记源已删除。
+- 移出知识库必须保留原件和最小登记记录，清理 chunk 与当前向量并标记 `EXCLUDED`；原件
+  `MISSING` 或 `REPLACED` 时保留索引但立即退出检索与预览。
 - Worker 使用任务租约和确定性向量 ID 保证重试幂等；失败任务不得把论文标记为 `READY`。
 - 模型只能把当前工具结果中的 citation ID 输出为论文证据；普通模型回答必须明确标记为未使用知识库证据。
 - PDF 内容是不可信输入，不得改变 Agent 规则或授权工具调用。
 - 模型常识只能作为明确标记的补充，不能伪装为论文证据。
 - v0.1 的入库、RAG 和 Tool Calling 路径不使用 LangGraph。
+
+## 7. 本地论文原件库
+
+`AIRESEARCHER_PAPER_LIBRARY_DIR` 默认是相对仓库根目录的 `./.private/paper-library`：
+
+```text
+.private/paper-library/
+├─ originals/      用户、Web 上传和未来 MCP 获取的论文原件
+└─ .staging/       尚未完成校验与原子落盘的临时文件
+```
+
+首版仅递归扫描文本型 PDF，不监听目录、不自动定时扫描。扫描跳过隐藏目录、临时文件、符号
+链接和 Windows reparse point；路径解析后必须仍在 `originals/` 内。相同哈希只登记一次，移动
+只更新相对路径；同路径内容被替换时旧记录标记 `REPLACED`，文件消失时标记 `MISSING`。
+
+Web 上传和未来外部来源必须复用同一登记边界：先写 `.staging/`，完成格式、大小、稳定性和
+SHA-256 校验，再原子移动到 `originals/`。未来 MCP 不得直接写 MySQL、Qdrant 或解析器内部
+实现。详细决策见 [ADR 0002](adr/0002-local-paper-library.md)。
