@@ -68,7 +68,9 @@ v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR
 
 ## 多 Chat 协作
 
-后续任务从最新本地 `main` 创建独立 Worktree，一个 Chat 只负责一个边界明确的本地 `codex/*` 分支。共享契约由专门任务先行修改并合入本地 `main`，三端实现再基于更新后的本地 `main` 开始。任务分支不推送、不创建 PR，由 Local 集成 Chat 串行合并；最终由用户统一把本地 `main` 上传到 GitHub。
+仓库长期保留 `codex/frontend`、`codex/backend`、`codex/agent`、`codex/docs` 和 `codex/test` 五个本地分支及 Worktree，分别维护三端应用、全部文档与契约、仓库级跨端测试。长期分支每次只承载一个边界明确的未完成任务，任务开始和合入后都以 fast-forward 方式同步本地 `main`。
+
+跨子系统功能使用从最新本地 `main` 创建的 `codex/feature/<feature>-<slice>` 临时分支族；契约切片先合入 `main`，各消费者切片再并行实现。模块测试始终由模块 Chat 维护，`codex/test` 只负责根级 `tests/**`。所有分支均不推送、不创建 PR、不 rebase 或 reset，由 Local 集成 Chat 留在 `main` 串行审查和合并，最终由用户统一上传本地 `main`。
 
 开始工作前请阅读：
 

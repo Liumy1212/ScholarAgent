@@ -18,12 +18,16 @@
 
 - Inspect `git status` before editing and preserve user or other-task changes.
 - Make contract-affecting changes in `contracts/` first. Update implementations only after the contract change is accepted.
-- A task must explicitly own shared contract files before modifying them. Never let multiple chats edit the same contract concurrently.
-- Use one bounded task per local `codex/*` branch or Codex Worktree. Start new work from the latest accepted local `main`, even when it is ahead of `origin/main`.
-- A Worktree task may commit only its own validated changes to its local task branch. It must not push the branch or create a pull request.
+- `contracts/**` is owned by the documentation Chat. Never let multiple Chats edit the same contract concurrently, and do not let implementation Chats change wire shapes.
+- Keep long-lived local branches and Worktrees for `codex/frontend`, `codex/backend`, `codex/agent`, `codex/docs`, and `codex/test`. Each branch may carry only one bounded, unfinished task at a time.
+- Before a new long-lived-branch task, run `git merge --ff-only main`. After Local integration, fast-forward that branch to `main` again before accepting another task.
+- Ownership is fixed: frontend, backend, and agent own their directories and module tests; docs owns `contracts/**`, `docs/**`, all `README.md` and `AGENTS.md` files, and `.env.example`; test owns only repository-level `tests/**`.
+- Cross-subsystem work uses temporary `codex/feature/<feature>-<slice>` branches and separate Worktrees created from the latest accepted local `main`. One Chat owns one slice; contract changes are accepted before consumer slices begin.
+- A Worktree task may commit only its own validated changes. It must not push, create a pull request, rebase, reset, force-update, or rewrite shared history.
 - Keep the Local checkout on `main`. The Local integration chat merges completed task branches into local `main` one at a time after reviewing their diff and validation results.
 - Codex must not push `main` or any task branch, create pull requests, rewrite shared history, or modify remote repository settings. The user alone publishes local `main` to GitHub.
-- Keep local task branches until the user confirms the integrated `main` has been uploaded; delete branches or Worktrees only when explicitly requested.
+- Module behavior changes include tests in the owning module; the test Chat adds only cross-system tests and returns module defects to the owning Chat.
+- Keep long-lived branches and Worktrees. Keep temporary feature branches until the user confirms the integrated `main` has been uploaded; delete branches or Worktrees only when explicitly requested.
 
 ## Architecture rules
 
