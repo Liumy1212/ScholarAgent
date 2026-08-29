@@ -62,4 +62,3 @@ Alembic migration 后在 Web 扫描。启动脚本、迁移和 Agent 都不得�
 - 未发布的 `DELETE /papers/{paperId}` 被替换，三端必须同步迁移到 exclusion API。
 - 已有 `storage_path` 数据不能就地无损升级，需要按部署文档备份、显式重置并重新扫描。
 - 本地绝对 `rootPath` 会返回给单用户本地 Web 以辅助管理，不应暴露到远程多用户部署。
-
