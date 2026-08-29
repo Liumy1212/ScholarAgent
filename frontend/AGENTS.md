@@ -4,27 +4,43 @@ These instructions extend the repository root `AGENTS.md` for work under `fronte
 
 ## Boundary
 
-- Build the React browser client only. Never call the Python Agent or infrastructure services directly.
-- All application traffic goes through Java under `/api/v1/**`.
-- Keep knowledge-base and chat pages separate, with shared UI code extracted only after real reuse appears.
+- Build only the React browser client.
+- All application traffic goes through Java under `/api/v1/**`; never call the Python Agent,
+  MySQL, Qdrant, or local files directly.
+- Keep browser-facing DTOs independent from Python persistence and integration DTOs.
+- Keep knowledge-base and question-answering pages separate; extract shared UI only after real
+  reuse appears.
 
-## Implementation baseline
+## Current implementation
 
-- Use React 19, Vite 7, TypeScript strict mode, pnpm 11, and Ant Design when the application is scaffolded.
-- Prefer typed functional components and explicit request/response types. Do not use `any` to bypass contract mismatches.
-- Add dependencies only when the current feature uses them. Do not add TanStack Query or a state framework before a concrete need exists.
-- Keep browser-facing DTOs independent from Python Agent DTOs.
+- The current UI implements single PDF upload, ingestion status/retry, hard delete, native PDF
+  preview, tool status, SSE answers, and page citations.
+- Accepted library scan and exclusion contracts are not implemented in the UI yet. Treat their
+  delivery as a dedicated consumer task and do not claim them as current behavior.
 
-## API and SSE
+## API and streaming
 
-- Treat `contracts/web-api/` as the source of truth. Do not invent or silently rename API fields in the client.
-- The chat stream is a POST SSE response parsed from `fetch`; do not replace it with `EventSource`, which cannot send the required POST body.
-- Preserve event names, event IDs, sequence numbers, request IDs, payloads, and terminal states defined by the SSE contract.
-- Distinguish completed, failed, and interrupted streams. Do not implement replay or automatic reconnect until the contract defines it.
-- Render paper evidence separately from model knowledge and retain paper title/page citation details.
+- Treat `contracts/web-api/` as the accepted target contract. Do not silently rename fields or
+  invent wire behavior.
+- POST SSE uses `fetch`; do not replace it with `EventSource`, which cannot send the request body.
+- Preserve event names, IDs, sequence numbers, request IDs, payloads, and terminal states.
+- Distinguish completed, failed, and interrupted streams. Do not add replay or automatic reconnect
+  unless the versioned SSE contract defines it.
+- Render paper evidence separately from ordinary model knowledge.
 
-## Quality
+## Implementation and quality
 
-- Add unit tests for stream parsing and state transitions, and component tests for user-visible behavior.
-- When scripts exist, run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handoff.
-- Keep accessibility, loading, empty, failure, and interrupted states visible and testable.
+- Use React 19, Vite 7, strict TypeScript, pnpm 11, typed functional components, and the existing
+  Ant Design dependency.
+- Do not use `any` to bypass contract mismatches or add a state/data framework without a current
+  feature need.
+- Add unit tests for parsers and state transitions, and component tests for visible behavior.
+- Keep loading, empty, disabled, failure, interrupted, and accessibility states testable.
+- Before handoff run:
+
+  ```powershell
+  pnpm lint
+  pnpm typecheck
+  pnpm test
+  pnpm build
+  ```

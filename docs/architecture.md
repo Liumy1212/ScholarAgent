@@ -1,140 +1,127 @@
-# AIResearcher 架构边界
+# AIResearcher 当前架构
 
-## 1. 核心概念
+本文只描述已经落地的系统结构和运行约束。尚未实现的能力及进入顺序见
+[阶段路线图](roadmap.md)。
 
-- **软件项目**：整个 AIResearcher GitHub 仓库。
-- **知识库**：长期保存和检索论文的 RAG 数据集合。第一版只有一个默认知识库。
-- **研究工作区**：围绕研究问题保存文献矩阵、方向、实验和论文草稿的长期能力，Demo 后再引入。
+## 1. 系统组成
 
-AIResearcher 是一个仓库，但包含三个可独立启动的应用：
+AIResearcher 是一个单仓库中的三个应用：
 
 ```text
 AIResearcher/
 ├─ frontend/          React Web 客户端
 ├─ backend/           Java Web Backend/BFF
 ├─ agent/             Python Agent API、RAG 与 Worker
-├─ contracts/         三端共享 API/SSE 契约
-├─ infrastructure/    本地基础设施配置
-├─ docs/              公开架构与开发文档
-├─ scripts/           开发和验证脚本
-└─ .github/           CI 与仓库协作配置
+├─ contracts/         Agent API、Web API 与 SSE 契约
+├─ infrastructure/    本地 MySQL 与 Qdrant 配置
+├─ scripts/           开发启动与验证脚本
+└─ docs/              架构、路线图与部署文档
 ```
-
-## 2. 运行关系
 
 ```mermaid
 flowchart LR
     React[React frontend] -->|REST / SSE| Java[Java BFF]
     Java -->|REST / SSE| Agent[Python Agent API]
-    Agent --> MySQL[(Agent MySQL)]
-    Agent --> Files[.private paper library]
+    Agent --> MySQL[(MySQL)]
+    Agent --> Files[PDF storage]
     Agent --> Qdrant[(Qdrant)]
     Agent --> DeepSeek[DeepSeek API]
     Worker[Python Worker] --> MySQL
+    Worker --> Files
     Worker --> Qdrant
 ```
 
-v0.1 由 MySQL 中的持久任务表和租约驱动轻量 Python Worker，不依赖 Redis Streams。只有在真实吞吐、分布式消费或恢复指标证明有需要时，才通过后续 ADR 引入 Redis。
+浏览器不得绕过 Java 直连 Python。Java 不直接访问 MySQL、Qdrant 或 PDF storage。
 
-### React
+## 2. 应用边界
+
+### React Frontend
 
 - 提供知识库、论文详情/PDF 预览和问答页面。
-- 负责浏览器交互、入库与 Agent 状态、流式文本和可跳转引用呈现。
-- 只访问 Java `/api/v1/**`，不得直接调用 Python 或基础设施。
+- 展示入库状态、工具状态、流式回答和页码引用。
+- 只调用 Java 的相对路径 `/api/v1/**`。
+- POST SSE 使用 `fetch` 解析；PDF 预览使用浏览器原生能力。
 
-### Java
+### Java Backend/BFF
 
-- 作为 Web Backend/BFF，对浏览器提供统一入口。
-- 负责请求校验、Web DTO、`Result<T>`、错误映射、超时、请求追踪和 SSE 转发。
-- 使用 AgentClient 调用 Python，不承担 PDF 解析、向量、RAG、Prompt 或模型逻辑。
-- 没有 Java 自有持久化需求时不创建重复论文表或 Mapper。
+- 为浏览器提供统一的 REST、PDF 和 SSE 入口。
+- 负责 Web DTO、请求校验、`Result<T>`、错误映射、请求 ID、超时和下游取消。
+- 通过 Agent client 调用 Python，并保持 PDF Range 与 SSE 事件语义。
+- 不解析 PDF、不生成向量、不拥有 Prompt 或模型逻辑，也不建立重复的论文数据库。
 
 ### Python Agent
 
-- 是论文与 AI 数据的唯一事实来源。
-- 管理论文文件和元数据、任务、chunk、索引、会话、消息、引用、AI Run 与模型调用记录。
-- 承担 PDF 解析、embedding、检索、Rerank、Tool Calling、Prompt、防提示注入规则和模型提供商适配。
-- 默认运行时通过统一 Provider 接口接入 DeepSeek `deepseek-v4-flash`；工具调用只允许经过参数校验的白名单只读工具。
-- 不读取 Java 数据库，不依赖 Java 代码。
+- 是论文文件及 AI 领域数据的唯一事实来源。
+- 管理论文、入库任务、chunk、会话、消息、Run、工具调用和引用。
+- 承担 PDF 解析、embedding、Qdrant 检索、Rerank、Tool Calling、Prompt 和模型适配。
+- 通过独立 Worker 使用 MySQL 持久任务与租约执行后台入库。
+- 将 PDF、用户输入和工具输出视为不可信内容，不允许其改变系统规则或工具权限。
 
-## 3. 数据边界
+## 3. 当前数据流程
 
-`infrastructure/` 只提交启动配置、`.env.example`、健康检查与操作说明。开发 MySQL 与 Qdrant
-默认由 Docker Compose 启动，数据使用 Docker named volume；模型缓存使用仓库外目录。PDF
-原件使用受控例外目录 `.private/paper-library/originals/`，上传与下载临时文件使用同级
-`.staging/`，整个 `.private/` 必须被 Git 忽略。
+### PDF 入库
 
-允许提交：
+1. 浏览器通过 Java 上传单个文本型 PDF。
+2. Java 校验 Web 请求并把文件转发给 Python。
+3. Python 将临时上传写入 `AIRESEARCHER_STORAGE_DIR/uploads/`，完成校验后保存到
+   `AIRESEARCHER_STORAGE_DIR/papers/`。
+4. Python 在 MySQL 中登记论文和入库任务。
+5. Worker 领取任务，使用 PyMuPDF 按页解析和切块。
+6. Worker 使用 BGE-M3 生成 embedding，并写入 Qdrant。
+7. 成功后论文进入 `READY`；失败任务保留稳定错误信息并可重试。
 
-- Docker Compose 和非敏感配置模板。
-- Flyway/Alembic 迁移。
-- 合成、可再分发的测试数据。
-- 启动、备份和重置说明。
+### 流式问答
 
-禁止提交：
+1. 浏览器经 Java 发起 POST SSE 请求。
+2. Python 创建 Agent Run，并由 DeepSeek 原生 Tool Calling 决定是否调用只读工具。
+3. `knowledge_base_search` 从 Qdrant 召回候选 chunk，再使用本地 reranker 排序。
+4. 工具证据携带 paper、page、quote、chunk 和 citation ID。
+5. Python 只接受能够映射到本轮工具证据的论文引用。
+6. Java 原样转发 SSE 事件，React 展示工具状态、回答和可跳页引用。
 
-- MySQL/Redis/Qdrant 数据。
-- PDF、用户上传文件以及 `.private/` 内的任何运行数据。
-- API Key、密码、Token、`.env`。
-- 下载模型、缓存、日志和私有研究材料。
+## 4. 数据与存储边界
 
-Python 使用 `airesearcher_agent` 数据库。Java 预留 `airesearcher_web`，但 v0.1 不创建 Java 业务数据库；只有登录、租户或其他明确属于 Web 层的数据出现时才启用。
+当前本地运行使用以下位置：
 
-## 4. API 与契约边界
+| 数据 | 位置 |
+| --- | --- |
+| PDF 与上传临时文件 | `AIRESEARCHER_STORAGE_DIR` 指向的仓库外目录 |
+| 模型缓存 | `AIRESEARCHER_MODEL_CACHE_DIR` 指向的仓库外目录 |
+| Agent 关系数据 | Docker named volume `airesearcher_mysql_data` |
+| Qdrant 向量 | Docker named volume `airesearcher_qdrant_data` |
+| 本机秘密 | 被 Git 忽略的根目录 `.env` |
+
+`infrastructure/` 只保存 Compose 配置，不保存数据库或向量运行数据。当前 Java 没有业务
+持久化；只有未来出现明确属于 Web 层的登录、租户等数据时才重新评估。
+
+允许提交非敏感配置模板、迁移、合成测试数据和公开文档。禁止提交真实 PDF、研究数据、
+API Key、密码、Token、数据库、向量、模型、缓存和日志。
+
+## 5. API 与契约
 
 - 浏览器调用 Java：`/api/v1/**`。
 - Java 调用 Python：`/agent-api/v1/**`。
-- Agent API 由 Python 实现、Java 消费。
-- Web API 由 Java 实现、React 消费。
-- OpenAPI、SSE Schema、事件示例与说明保存在 `contracts/`，先于实现修改。
-- 已发布版本的破坏性变化必须创建新版本，不得直接覆盖。
+- 普通 Java JSON API 使用 `Result<T>`；Agent JSON API 使用直接 DTO。
+- SSE、PDF 下载和健康检查不包装 `Result<T>`。
+- PDF 代理保留 `Range`、`Content-Range`、`Content-Length`、`Content-Type`、
+  `Accept-Ranges` 和 `ETag` 等必要语义。
+- SSE 契约定义事件名、事件 ID、序号、payload、顺序以及唯一终止事件。
 
-普通 Java JSON API 使用 `Result<T>`；SSE、PDF 下载和 Actuator 不包装该结构。机器可读 OpenAPI、SSE Schema、合法与非法夹具已经在 `contracts/` 冻结并由三端共同验证。
+`contracts/` 保存已接受的目标契约。契约可以先于消费者实现合入，因此必须在
+[路线图](roadmap.md)中标明实施状态；不能仅因契约存在就宣称功能已经可用。
 
-## 5. v0.1 范围
+## 6. 运行不变量
 
-v0.1 固定为单用户、本地优先、单默认知识库，并且只包含一条完整产品闭环：
+- 只有完成入库并处于 `READY` 的论文能够参与当前检索。
+- chunk 不跨 PDF 页，论文证据必须能够回溯到 paper、page、quote 和 chunk。
+- Worker 使用任务租约和确定性向量 ID 保证重试幂等；失败任务不得把论文标记为
+  `READY`。
+- 模型只能把当前工具结果中的 citation ID 输出为论文证据。
+- 普通模型回答必须与论文证据明确区分。
+- Java 保持无论文业务持久化，Python 不读取或依赖 Java 内部代码。
 
-1. 文本型 PDF 上传或放入本地原件库，手动创建后台扫描，SHA-256 去重、按页 chunk、本地 embedding 和 Qdrant 建库。
-2. MySQL 持久入库/扫描任务、轻量 Python Worker、状态、失败原因、重试，以及保留原件的排除/恢复。
-3. 论文列表、详情和浏览器原生 PDF 预览。
-4. `knowledge_base_search` 与 `document_lookup` 两个只读工具，以及本地 Rerank。
-5. DeepSeek `deepseek-v4-flash` Provider 和最多三轮的模型原生 Tool Calling；不实现问题分类器或兼容协议伪 Tool Calling。
-6. 持久会话、Agent 工具状态、SSE 流式回答、页码引用和论文证据与普通模型回答区分。
+## 7. 后续演进边界
 
-以下能力明确不进入 v0.1：
-
-- 登录、租户、Java 业务持久化、多知识库和 READY 论文多选器。
-- OCR、多格式解析、目录监听、定时扫描、元数据编辑、人工笔记和全库重建索引。
-- 索引版本原子切换、Redis Streams 和 LangGraph。
-- AI 摘要、arXiv、研究工作区、创新评估、实验闭环和论文写作。
-
-## 6. 关键约束
-
-- 仅 `READY + AVAILABLE` 且 `searchable=true` 的论文可以参与检索。
-- chunk 不跨 PDF 页，检索证据必须能够回溯到 paper、page、quote 和 chunk。
-- 移出知识库必须保留原件和最小登记记录，清理 chunk 与当前向量并标记 `EXCLUDED`；原件
-  `MISSING` 或 `REPLACED` 时保留索引但立即退出检索与预览。
-- Worker 使用任务租约和确定性向量 ID 保证重试幂等；失败任务不得把论文标记为 `READY`。
-- 模型只能把当前工具结果中的 citation ID 输出为论文证据；普通模型回答必须明确标记为未使用知识库证据。
-- PDF 内容是不可信输入，不得改变 Agent 规则或授权工具调用。
-- 模型常识只能作为明确标记的补充，不能伪装为论文证据。
-- v0.1 的入库、RAG 和 Tool Calling 路径不使用 LangGraph。
-
-## 7. 本地论文原件库
-
-`AIRESEARCHER_PAPER_LIBRARY_DIR` 默认是相对仓库根目录的 `./.private/paper-library`：
-
-```text
-.private/paper-library/
-├─ originals/      用户、Web 上传和未来 MCP 获取的论文原件
-└─ .staging/       尚未完成校验与原子落盘的临时文件
-```
-
-首版仅递归扫描文本型 PDF，不监听目录、不自动定时扫描。扫描跳过隐藏目录、临时文件、符号
-链接和 Windows reparse point；路径解析后必须仍在 `originals/` 内。相同哈希只登记一次，移动
-只更新相对路径；同路径内容被替换时旧记录标记 `REPLACED`，文件消失时标记 `MISSING`。
-
-Web 上传和未来外部来源必须复用同一登记边界：先写 `.staging/`，完成格式、大小、稳定性和
-SHA-256 校验，再原子移动到 `originals/`。未来 MCP 不得直接写 MySQL、Qdrant 或解析器内部
-实现。详细决策见 [ADR 0002](adr/0002-local-paper-library.md)。
+下一项已接受目标是本地论文原件库，包括目录扫描、原件状态、排除/恢复和统一登记边界。
+这些能力当前尚未进入运行架构，其实施范围和完成条件统一维护在路线图阶段 1.4。实现完成并
+通过三端验证后，再将本文件更新为新的当前架构。

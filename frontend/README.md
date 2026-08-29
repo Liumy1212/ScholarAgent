@@ -1,24 +1,40 @@
-# AIResearcher Frontend
+# Frontend
 
-单篇论文 Demo 的 React 19 客户端。知识库页提供 PDF 上传、原件库手动扫描、入库状态、
-排除/恢复和浏览器原生预览；问答页展示工具状态、SSE 正文和可跳页引用。
+AIResearcher 的 React 19 浏览器客户端。当前提供单 PDF 上传、入库状态与重试、删除、原生
+PDF 预览，以及工具状态、SSE 回答和页码引用。
 
-浏览器仅调用 Java 的相对路径 `/api/v1/**`，不会直连 Python。POST SSE 使用 `fetch` 解析，
-PDF 引用链接使用 `#page=<页码>`。
+浏览器只调用 Java 的 `/api/v1/**`。本地论文原件库的扫描和排除/恢复已经进入 Web API
+契约，但尚未进入当前 UI，状态见 [路线图阶段 1.4](../docs/roadmap.md)。
 
-## 运行与检查
+## 目录结构
 
-完整环境、首次依赖安装和一键启动见
-[Windows 本地部署与启动](../docs/deployment.md)。
+| 路径 | 职责 |
+| --- | --- |
+| `src/api/` | REST DTO、请求封装、错误处理和 SSE 解析 |
+| `src/chat/` | 问答流状态与状态转换 |
+| `src/pages/` | 知识库页、问答页及页面测试 |
+| `src/test/` | Vitest/Testing Library 公共测试配置 |
+| `src/App.tsx` | 应用页面与导航入口 |
+| `src/main.tsx` | React 挂载入口 |
+| `src/styles.css` | 当前全局样式 |
 
-在 `frontend/` 下验证：
+## 开发命令
+
+首次依赖安装：
 
 ```powershell
+pnpm install --frozen-lockfile
+```
+
+在 `frontend/` 下运行：
+
+```powershell
+pnpm dev
 pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-修改本模块前还应阅读 [Frontend instructions](AGENTS.md) 与
-[总体架构](../docs/architecture.md)。
+完整环境准备与服务启动见 [Windows 本地部署与运行](../docs/deployment.md)。修改本模块前
+阅读 [Frontend instructions](AGENTS.md) 和 [当前架构](../docs/architecture.md)。

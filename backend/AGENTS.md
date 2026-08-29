@@ -4,30 +4,38 @@ These instructions extend the repository root `AGENTS.md` for work under `backen
 
 ## Boundary
 
-- Java is the Web Backend/BFF. Use the flow `Controller -> Service -> AgentClient`.
-- Validate browser requests, convert DTOs, normalize errors, propagate request IDs, and proxy Agent REST/SSE responses.
-- Do not parse PDFs, create embeddings, implement retrieval, own prompts, call models, or duplicate Agent persistence.
-- Do not create a Java database or Mapper merely to satisfy a layered architecture.
+- Java is the browser-facing Backend/BFF. Keep the flow `Controller -> Service -> AgentClient`.
+- Validate browser requests, convert DTOs, normalize errors, propagate request IDs, and proxy
+  Agent REST/SSE/PDF responses.
+- Do not parse PDFs, create embeddings, implement retrieval, own prompts, call models, or duplicate
+  Agent persistence.
+- Do not create a Java database or Mapper without data that clearly belongs to the Web layer.
 
-## Implementation baseline
+## Current implementation
 
-- Use Java 21, Spring Boot 4, Spring MVC, Maven Wrapper, and domain-oriented packages when the application is scaffolded.
-- Use `WebClient` only as the downstream client. Do not switch the server runtime from Spring MVC to WebFlux.
-- Prefer Java records for request and response DTOs.
-- Keep Agent integration DTOs internal. Convert them before returning browser-facing responses.
-- Use MapStruct for non-trivial DTO mapping; do not use `BeanUtils.copyProperties`.
+- The current BFF proxies single-paper upload/list/detail/delete, ingestion status/retry, PDF Range,
+  and streaming answers.
+- Accepted library scan and exclusion contracts are not implemented in Java yet. Implement them as
+  a bounded consumer task without changing the accepted wire shape.
 
 ## Responses and streaming
 
-- Wrap ordinary JSON business responses in `Result<T>`; use `Result<PageResult<T>>` for pagination.
-- Use correct HTTP status codes and centralize failures in `GlobalExceptionHandler`. Controllers must not hand-build failure envelopes.
+- Use Java 21, Spring Boot 4, Spring MVC, the Maven Wrapper, and the existing domain packages.
+- Use `WebClient` only as the downstream Agent client; do not switch the server to WebFlux.
+- Prefer records for DTOs and keep Agent integration DTOs internal.
+- Wrap ordinary browser JSON responses in `Result<T>` and pagination in `Result<PageResult<T>>`.
 - Do not wrap SSE, PDF downloads, or Actuator responses in `Result<T>`.
 - Accept or generate `X-Request-Id`, return it to the browser, and forward it to the Agent.
-- Preserve downstream SSE event name, ID, and data. Cancel the downstream subscription when the browser disconnects.
-- Map connection failures before the stream opens to the agreed non-2xx error. Express failures after streaming begins with the contracted terminal event.
+- Preserve downstream SSE event names, IDs, and data; cancel downstream work when the browser
+  disconnects.
 
 ## Quality
 
-- Test controllers, services, DTO conversion, request tracking, downstream timeouts, cancellation, and stream error mapping.
-- When the wrapper exists, run `./mvnw verify` or `mvnw.cmd verify` before handoff.
-- Use contract examples in integration tests rather than copying ad hoc payloads.
+- Test controllers, services, DTO conversion, request tracking, timeouts, cancellation, PDF Range,
+  and stream error mapping.
+- Use contract fixtures rather than copied ad hoc payloads.
+- Before handoff run:
+
+  ```powershell
+  .\mvnw.cmd verify
+  ```

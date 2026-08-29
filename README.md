@@ -1,21 +1,50 @@
 # AIResearcher
 
-AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库项目。仓库名暂为 ScholarAgent，产品名、包名和项目文档统一使用 AIResearcher。
+AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库项目。当前已经完成可运行的
+单篇论文 RAG 闭环，并以此为基础逐步扩展论文管理、深度阅读、研究规划、实验和科研写作。
 
-## 当前状态
+## 当前能力
 
-v0.1 单篇论文 Demo 纵向切片已经落地：React 只经 Java BFF 调用 Python Agent，支持文本型 PDF 上传、后台建库、浏览器原生预览、DeepSeek 原生 Tool Calling、Qdrant 检索、本地 Rerank、SSE 回答和页码引用。`FakeChatProvider` 只保留在无外部依赖的测试中，不是默认运行时。
+当前实现支持：
 
-本地开发默认通过 Docker Compose 运行 MySQL 8.4 与 Qdrant 1.19，不依赖宿主机 MySQL 服务；数据库和向量数据保存在仓库外的 Docker named volume 中。
-
-v0.1 的核心目标不是一次铺开所有科研自动化能力，而是完成一条可以真实使用的闭环：
+- React 仅通过 Java BFF 访问 Python Agent。
+- 上传文本型 PDF，由 Python Worker 完成解析、按页切块和后台建库。
+- 使用 BGE-M3 embedding、Qdrant 检索和本地 Rerank。
+- 使用 DeepSeek 原生 Tool Calling 选择知识库检索或文档查询工具。
+- 通过 SSE 返回工具状态、流式回答和可跳转到 PDF 页码的引用。
+- 使用 MySQL 保存论文、任务、会话、Run 和引用等 Agent 数据。
 
 ```text
-上传单篇 PDF → 自动解析与建库 → Web 预览
-→ 用户提问 → Agent 自主调用工具
-→ RAG 检索 → Rerank → LLM 流式回答
-→ 展示并跳转到论文页码引用
+上传 PDF → 后台解析与建库 → Web 预览
+→ 用户提问 → Tool Calling
+→ 检索与 Rerank → SSE 流式回答
+→ 展示论文证据与页码引用
 ```
+
+本地论文原件库、目录扫描、原件状态以及排除/恢复接口已经完成机器可读契约，但
+Agent、Backend、Frontend 和运行配置尚未实现这些新契约。当前运行时仍使用仓库外的
+`AIRESEARCHER_STORAGE_DIR` 和现有单文件上传/删除流程，具体进度见
+[长期路线图](docs/roadmap.md)。
+
+## 调用链
+
+```mermaid
+flowchart LR
+    React[React frontend] -->|REST / SSE| Java[Java BFF]
+    Java -->|REST / SSE| Agent[Python Agent API]
+    Agent --> MySQL[(MySQL)]
+    Agent --> Qdrant[(Qdrant)]
+    Agent --> Files[PDF storage]
+    Agent --> DeepSeek[DeepSeek API]
+    Worker[Python Worker] --> MySQL
+    Worker --> Qdrant
+```
+
+- React 只访问 Java 的 `/api/v1/**`。
+- Java 负责浏览器 API、校验、错误映射、请求追踪和 SSE/PDF 转发。
+- Python 是论文文件、入库、检索、Prompt、模型调用及 AI 数据的唯一事实来源。
+
+完整边界见 [架构说明](docs/architecture.md)。
 
 ## 仓库结构
 
@@ -24,63 +53,37 @@ v0.1 的核心目标不是一次铺开所有科研自动化能力，而是完成
 | `frontend/` | React Web 客户端 |
 | `backend/` | Java Web Backend/BFF |
 | `agent/` | Python Agent API、RAG 与 Worker |
-| `contracts/` | Web API、Agent API 与 SSE 契约 |
-| `infrastructure/` | 本地基础设施配置，不保存运行数据 |
-| `docs/` | 架构、路线、开发流程和 ADR |
-| `scripts/` | 跨平台开发与验证脚本 |
-| `.github/` | GitHub Actions 与仓库协作配置 |
+| `contracts/` | Agent API、Web API 与 SSE 契约 |
+| `infrastructure/` | 本地 MySQL、Qdrant 开发配置 |
+| `scripts/` | 本地启动与验证辅助脚本 |
+| `docs/` | 架构、路线图和部署文档 |
 
-## 应用边界
+各模块的目录结构、入口和检查命令保存在对应模块的 `README.md`。
 
-```mermaid
-flowchart LR
-    React[React frontend] -->|REST / SSE| Java[Java BFF]
-    Java -->|REST / SSE| Agent[Python Agent API]
-    Agent --> MySQL[(MySQL)]
-    Agent --> Qdrant[(Qdrant)]
-    Agent --> Files[.private paper library]
-    Worker[Python Worker] --> MySQL
-    Worker --> Qdrant
+## 快速开始
+
+当前完整运行环境面向 Windows 10/11。首次安装、环境变量、版本要求、一键启动、手动启动、
+停止和排错请阅读 [Windows 本地部署与运行](docs/deployment.md)。
+
+```powershell
+Copy-Item .\.env.example .\.env
+# 编辑 .env 后：
+.\scripts\start-dev.ps1 -CheckOnly
+.\scripts\start-dev.ps1
 ```
 
-- React 只访问 Java 的 `/api/v1/**`。
-- Java 负责 Web API、统一响应、校验、错误映射、请求追踪与 SSE 转发。
-- Python 负责论文和 AI 数据、解析、检索、Prompt、模型调用与后台任务，是这些数据的唯一事实来源。
-- v0.1 使用 MySQL 任务表驱动轻量 Worker，不引入 Redis Streams；Java 保持无业务持久化。
-- PDF 原件统一保存在被 Git 忽略的 `.private/paper-library/originals/`，上传和未来 MCP
-  下载先进入 `.staging/`；数据库、PDF、向量、模型、密钥与日志均不得进入 Git。
+启动完成后访问 <http://127.0.0.1:5173>。
 
-完整边界见 [架构说明](docs/architecture.md)。
+## 文档入口
 
-## 开发路线
+- [当前架构与系统边界](docs/architecture.md)
+- [阶段路线图与长期科研闭环](docs/roadmap.md)
+- [Windows 本地部署与运行](docs/deployment.md)
+- [AI 仓库执行规则](AGENTS.md)
+- [机器可读接口契约](contracts/README.md)
 
-- M0：可靠的契约、三端骨架和自动检查基线。
-- M1：单篇文本型 PDF 上传、后台解析建库、状态展示和 Web 原生预览。
-- M2：Qdrant 检索、真实 BGE embedding、本地 Rerank 和证据追踪。
-- M3：DeepSeek 原生 Tool Calling、最小会话/Run 持久化和引用校验。
-- M4：失败恢复、三端端到端、启动文档和 `v0.1.0` 验收。
+## 数据安全
 
-v0.1 固定为单用户、本地优先、单默认知识库。批量上传、OCR、多知识库、Redis Streams、LangGraph、研究工作区和论文写作均延后。
-
-首次安装、环境变量、一键启动、停止和排错见 [Windows 本地部署与启动](docs/deployment.md)；
-自动检查与多 Chat/Worktree 协作见 [开发流程](docs/development.md)。
-
-详细内容见 [路线图](docs/roadmap.md)。
-
-## 多 Chat 协作
-
-仓库长期保留 `codex/frontend`、`codex/backend`、`codex/agent`、`codex/docs` 和 `codex/test` 五个本地分支及 Worktree，分别维护三端应用、全部文档与契约、仓库级跨端测试。长期分支每次只承载一个边界明确的未完成任务，任务开始和合入后都以 fast-forward 方式同步本地 `main`。
-
-跨子系统功能使用从最新本地 `main` 创建的 `codex/feature/<feature>-<slice>` 临时分支族；契约切片先合入 `main`，各消费者切片再并行实现。模块测试始终由模块 Chat 维护，`codex/test` 只负责根级 `tests/**`。所有分支均不推送、不创建 PR、不 rebase 或 reset，由 Local 集成 Chat 留在 `main` 串行审查和合并，最终由用户统一上传本地 `main`。
-
-开始工作前请阅读：
-
-- [开发环境与多 Chat 工作流](docs/development.md)
-- 根目录及目标子目录中的 `AGENTS.md`
-- [ADR 0002：本地论文原件库](docs/adr/0002-local-paper-library.md)
-
-## 安全
-
-仓库只接收代码、配置模板、迁移、合成测试数据和公开文档。真实 PDF 可以保存在仓库目录内
-受控且被忽略的 `.private/` 边界中，但不得进入 Git；研究数据、`.env`、凭据、数据库文件、
-向量数据、模型文件和运行日志同样不得提交。
+`.env`、API Key、密码、真实 PDF、数据库、向量、模型、缓存和日志不得提交到 Git。
+当前 PDF storage 和模型缓存必须位于仓库外；MySQL 与 Qdrant 数据保存在 Docker named
+volume 中。仓库只接收代码、非敏感配置模板、迁移、合成测试数据和公开文档。
