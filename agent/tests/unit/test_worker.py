@@ -14,8 +14,20 @@ from tests.support import (
 from airesearcher_agent.application.papers import PaperService
 from airesearcher_agent.domain.papers import IngestionJobStatus, IngestionStage, PaperStatus
 from airesearcher_agent.ingestion.pdf import PdfParser
-from airesearcher_agent.persistence.models import IngestionJobRecord, PaperRecord, utc_now
+from airesearcher_agent.persistence.models import (
+    ChunkRecord,
+    IngestionJobRecord,
+    PaperRecord,
+    utc_now,
+)
 from airesearcher_agent.worker.service import IngestionWorker
+
+
+class MutatingPdfParser(PdfParser):
+    def parse(self, *, paper_id: str, path: Path):  # type: ignore[no-untyped-def]
+        parsed = super().parse(paper_id=paper_id, path=path)
+        path.write_bytes(path.read_bytes() + b"\nchanged-during-ingestion")
+        return parsed
 
 
 def _pdf_bytes(path: Path) -> bytes:
@@ -111,3 +123,35 @@ def test_worker_recovers_an_expired_database_lease(tmp_path: Path) -> None:
     assert recovered.stage is IngestionStage.QUEUED
     assert recovered.attempt == 1
     assert recovered.failure is None
+
+
+def test_worker_rejects_an_original_changed_after_parsing_without_publishing(
+    tmp_path: Path,
+) -> None:
+    settings = runtime_settings(tmp_path)
+    database = sqlite_database()
+    vectors = RecordingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    uploaded = asyncio.run(
+        service.upload(MemoryUpload(_pdf_bytes(tmp_path / "changing.pdf"), filename="changing.pdf"))
+    )
+    worker = IngestionWorker(
+        database=database,
+        parser=MutatingPdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        embedding=DeterministicEmbedding(),
+        vector_store=vectors,
+        settings=settings,
+        worker_id="source-stability-worker",
+    )
+
+    assert worker.run_once() is True
+
+    failed = service.get_job(uploaded.ingestion_job.job_id)
+    assert failed.status is IngestionJobStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.code == "LIBRARY_FILE_CHANGED"
+    assert failed.can_retry is False
+    assert service.get_paper(uploaded.paper.paper_id).status is PaperStatus.FAILED
+    assert vectors.upserts == []
+    with database.session() as session:
+        assert session.query(ChunkRecord).count() == 0

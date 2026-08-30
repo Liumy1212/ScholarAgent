@@ -13,12 +13,13 @@ These instructions extend the repository root `AGENTS.md` for work under `agent/
 
 ## Current implementation
 
-- The current Agent uses `AIRESEARCHER_STORAGE_DIR/papers` and `uploads` outside the repository.
-- It implements single-paper upload/delete, MySQL tasks, PyMuPDF ingestion, Qdrant retrieval,
-  local reranking, DeepSeek Tool Calling, SSE, and citation validation.
-- Accepted library scan and exclusion contracts are pending implementation. Do not add only the
-  environment variable or describe the target directory layout as active before the complete
-  Agent data lifecycle is implemented and tested.
+- The current Agent uses `AIRESEARCHER_PAPER_LIBRARY_DIR` with `originals/` and `.staging/` for new
+  originals. `AIRESEARCHER_STORAGE_DIR` remains only for legacy migration reads.
+- It implements library registration, scanning, manual ingestion, exclusion/restore, MySQL tasks,
+  PyMuPDF ingestion, Qdrant retrieval, local reranking, DeepSeek Tool Calling, SSE, and citation
+  validation.
+- The Frontend uses the unified library workflow and only selects `searchable=true` papers in
+  Chat. Keep the compatibility paper routes for older clients until a separate removal task.
 
 ## Contracts and data
 

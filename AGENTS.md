@@ -12,12 +12,14 @@
 
 ## Current stage
 
-- The implemented baseline is the single-paper local RAG flow described as stages 1.1-1.3 in
+- The implemented baseline is the single-paper local RAG and paper-library flow described as stages 1.1-1.4 in
   `docs/roadmap.md`.
-- Local paper-library scan and exclusion contracts are accepted, but their Agent, Backend,
-  Frontend, and runtime implementations are still pending.
-- The current runtime uses `AIRESEARCHER_STORAGE_DIR` outside the repository. Do not describe
-  `AIRESEARCHER_PAPER_LIBRARY_DIR` or local-library scanning as shipped behavior.
+- Local paper-library scan, manual ingestion, and exclusion contracts are implemented by the
+  Agent and Backend, and runtime configuration uses `AIRESEARCHER_PAPER_LIBRARY_DIR` below the
+  ignored repository `.private/` boundary.
+- The Frontend uses the unified library list, browser scan controls, manual ingestion, and
+  exclusion/restore workflow; Chat only selects `searchable=true` papers. Stage 1.4 has passed the
+  documented synthetic-PDF full-stack smoke test.
 
 ## System boundaries
 

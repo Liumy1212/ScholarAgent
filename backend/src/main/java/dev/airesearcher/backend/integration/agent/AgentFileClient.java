@@ -45,8 +45,20 @@ public class AgentFileClient {
     }
 
     public AgentFileResponse open(String paperId, String range, String requestId) {
+        return openFile(new String[]{"agent-api", "v1", "papers", paperId, "file"}, range, requestId);
+    }
+
+    public AgentFileResponse openLibraryFile(String libraryFileId, String range, String requestId) {
+        return openFile(
+                new String[]{"agent-api", "v1", "library", "files", libraryFileId, "file"},
+                range,
+                requestId
+        );
+    }
+
+    private AgentFileResponse openFile(String[] pathSegments, String range, String requestId) {
         URI uri = UriComponentsBuilder.fromUri(properties.baseUrl())
-                .pathSegment("agent-api", "v1", "papers", paperId, "file")
+                .pathSegment(pathSegments)
                 .build()
                 .encode()
                 .toUri();

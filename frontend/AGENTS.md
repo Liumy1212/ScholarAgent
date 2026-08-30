@@ -13,10 +13,11 @@ These instructions extend the repository root `AGENTS.md` for work under `fronte
 
 ## Current implementation
 
-- The current UI implements single PDF upload, ingestion status/retry, hard delete, native PDF
-  preview, tool status, SSE answers, and page citations.
-- Accepted library scan and exclusion contracts are not implemented in the UI yet. Treat their
-  delivery as a dedicated consumer task and do not claim them as current behavior.
+- The current UI implements the unified library list, original-only PDF upload, manual scan and
+  ingestion, status/retry, exclusion/restore, native original preview, tool status, SSE answers,
+  and page citations.
+- There is no browser hard-delete action for originals. Chat selection is limited to
+  `searchable=true` papers.
 
 ## API and streaming
 

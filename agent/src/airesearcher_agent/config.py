@@ -56,6 +56,10 @@ class Settings(BaseSettings):
         default_factory=lambda: Path.home() / ".airesearcher" / "storage",
         alias="AIRESEARCHER_STORAGE_DIR",
     )
+    paper_library_dir: Path = Field(
+        default_factory=lambda: REPOSITORY_ROOT / ".private" / "paper-library",
+        alias="AIRESEARCHER_PAPER_LIBRARY_DIR",
+    )
     model_cache_dir: Path = Field(
         default_factory=lambda: Path.home() / ".cache" / "airesearcher" / "models",
         alias="AIRESEARCHER_MODEL_CACHE_DIR",
@@ -135,6 +139,14 @@ class Settings(BaseSettings):
     def resolve_runtime_path(cls, value: Path) -> Path:
         return value.expanduser().resolve()
 
+    @field_validator("paper_library_dir")
+    @classmethod
+    def resolve_paper_library_path(cls, value: Path) -> Path:
+        expanded = value.expanduser()
+        if not expanded.is_absolute():
+            expanded = REPOSITORY_ROOT / expanded
+        return expanded.resolve()
+
     @model_validator(mode="after")
     def validate_runtime_boundaries(self) -> Self:
         if self.chunk_overlap >= self.chunk_size:
@@ -145,6 +157,14 @@ class Settings(BaseSettings):
         ):
             if runtime_path == REPOSITORY_ROOT or runtime_path.is_relative_to(REPOSITORY_ROOT):
                 raise ValueError(f"{name} must be outside the repository")
+        private_root = (REPOSITORY_ROOT / ".private").resolve()
+        if self.paper_library_dir.is_relative_to(REPOSITORY_ROOT) and (
+            self.paper_library_dir == private_root
+            or not self.paper_library_dir.is_relative_to(private_root)
+        ):
+            raise ValueError(
+                "AIRESEARCHER_PAPER_LIBRARY_DIR inside the repository must be below .private"
+            )
         return self
 
     @cached_property
@@ -158,6 +178,18 @@ class Settings(BaseSettings):
             database=self.db_name,
             query={"charset": "utf8mb4"},
         )
+
+    @cached_property
+    def paper_library_originals_dir(self) -> Path:
+        return self.paper_library_dir / "originals"
+
+    @cached_property
+    def paper_library_staging_dir(self) -> Path:
+        return self.paper_library_dir / ".staging"
+
+    def ensure_paper_library_directories(self) -> None:
+        (self.paper_library_originals_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        self.paper_library_staging_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_runtime_directories(self) -> None:
         (self.storage_dir / "papers").mkdir(parents=True, exist_ok=True)

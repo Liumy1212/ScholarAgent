@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
 from airesearcher_agent.domain.papers import (
@@ -9,12 +9,14 @@ from airesearcher_agent.domain.papers import (
     IngestionJobView,
     IngestionStage,
     IngestionSummaryView,
+    PaperSourceStatus,
     PaperStatus,
     PaperView,
 )
 from airesearcher_agent.persistence.models import (
     ChunkRecord,
     IngestionJobRecord,
+    LibraryFileRecord,
     PaperRecord,
 )
 
@@ -92,6 +94,18 @@ def ingestion_job_view(job: IngestionJobRecord) -> IngestionJobView:
 
 def paper_view(session: Session, paper: PaperRecord) -> PaperView:
     job = latest_job(session, paper.id)
+    library_file = session.scalar(
+        select(LibraryFileRecord)
+        .where(LibraryFileRecord.paper_id == paper.id)
+        .order_by(
+            case(
+                (LibraryFileRecord.source_status == PaperSourceStatus.AVAILABLE.value, 0),
+                else_=1,
+            ),
+            LibraryFileRecord.discovered_at,
+            LibraryFileRecord.id,
+        )
+    )
     created_at = as_utc(paper.created_at)
     updated_at = as_utc(paper.updated_at)
     if created_at is None or updated_at is None:
@@ -103,7 +117,20 @@ def paper_view(session: Session, paper: PaperRecord) -> PaperView:
         publication_year=paper.publication_year,
         file_name=paper.original_filename,
         file_size_bytes=paper.file_size_bytes,
+        library_relative_path=(
+            library_file.relative_path if library_file is not None else paper.original_filename
+        ),
+        source_status=(
+            PaperSourceStatus(library_file.source_status)
+            if library_file is not None
+            else PaperSourceStatus.MISSING
+        ),
         status=PaperStatus(paper.status),
+        searchable=(
+            paper.status == PaperStatus.READY.value
+            and library_file is not None
+            and library_file.source_status == PaperSourceStatus.AVAILABLE.value
+        ),
         page_count=paper.page_count,
         created_at=created_at,
         updated_at=updated_at,
@@ -119,7 +146,15 @@ def list_paper_views(session: Session) -> tuple[PaperView, ...]:
 
 
 def ready_paper_ids(session: Session, requested: tuple[str, ...]) -> tuple[str, ...]:
-    statement = select(PaperRecord.id).where(PaperRecord.status == PaperStatus.READY.value)
+    statement = (
+        select(PaperRecord.id)
+        .join(LibraryFileRecord, LibraryFileRecord.paper_id == PaperRecord.id)
+        .where(
+            PaperRecord.status == PaperStatus.READY.value,
+            LibraryFileRecord.source_status == PaperSourceStatus.AVAILABLE.value,
+        )
+        .distinct()
+    )
     if requested:
         statement = statement.where(PaperRecord.id.in_(requested))
     return tuple(session.scalars(statement).all())

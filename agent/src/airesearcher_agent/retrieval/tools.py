@@ -6,8 +6,9 @@ from sqlalchemy import String, cast, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from airesearcher_agent.config import Settings
+from airesearcher_agent.domain.papers import PaperSourceStatus, PaperStatus
 from airesearcher_agent.persistence.database import Database
-from airesearcher_agent.persistence.models import ChunkRecord, PaperRecord
+from airesearcher_agent.persistence.models import ChunkRecord, LibraryFileRecord, PaperRecord
 from airesearcher_agent.persistence.repositories import chunks_by_ids, ready_paper_ids
 from airesearcher_agent.retrieval.models import DocumentMatch, Evidence
 from airesearcher_agent.retrieval.ports import EmbeddingProvider, Reranker, VectorStore
@@ -75,10 +76,11 @@ class RetrievalTools:
         ordered_chunk_ids = tuple(hit.chunk_id for hit in hits)
         with self._database.session() as session:
             chunks = chunks_by_ids(session, ordered_chunk_ids)
+            current_allowed_ids = ready_paper_ids(session, allowed_ids)
             papers = {
                 paper.id: paper
                 for paper in session.scalars(
-                    select(PaperRecord).where(PaperRecord.id.in_(allowed_ids))
+                    select(PaperRecord).where(PaperRecord.id.in_(current_allowed_ids))
                 ).all()
             }
 
@@ -133,7 +135,13 @@ class RetrievalTools:
         with self._database.session() as session:
             papers = session.scalars(
                 select(PaperRecord)
+                .join(LibraryFileRecord, LibraryFileRecord.paper_id == PaperRecord.id)
                 .where(or_(*conditions))
+                .where(
+                    PaperRecord.status == PaperStatus.READY.value,
+                    LibraryFileRecord.source_status == PaperSourceStatus.AVAILABLE.value,
+                )
+                .distinct()
                 .order_by(PaperRecord.created_at.desc())
                 .limit(10)
             ).all()

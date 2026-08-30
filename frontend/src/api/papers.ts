@@ -30,7 +30,7 @@ function createRequestId(): string {
   return `req-${crypto.randomUUID()}`;
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<ApiResult<T>> {

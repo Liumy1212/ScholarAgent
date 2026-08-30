@@ -3,9 +3,16 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from airesearcher_agent.domain.library import (
+    LibraryFileKnowledgeStatus,
+    LibraryFileSourceStatus,
+    LibraryScanItemOutcome,
+    LibraryScanStatus,
+)
 from airesearcher_agent.domain.papers import (
     IngestionJobStatus,
     IngestionStage,
+    PaperSourceStatus,
     PaperStatus,
 )
 
@@ -63,7 +70,10 @@ class PaperResponse(WireModel):
     publication_year: int | None
     file_name: str
     file_size_bytes: int
+    library_relative_path: str
+    source_status: PaperSourceStatus
     status: PaperStatus
+    searchable: bool
     page_count: int | None
     created_at: datetime
     updated_at: datetime
@@ -91,3 +101,83 @@ class PaperListResponse(WireModel):
 class DeletePaperResponse(WireModel):
     paper_id: str
     deleted: bool
+
+
+class LibraryFileResponse(WireModel):
+    library_file_id: str
+    relative_path: str
+    file_name: str
+    file_size_bytes: int
+    sha256: str
+    source_status: LibraryFileSourceStatus
+    knowledge_status: LibraryFileKnowledgeStatus
+    paper_id: str | None
+    paper_title: str | None
+    searchable: bool
+    current_ingestion: IngestionSummaryResponse | None
+    discovered_at: datetime
+    last_seen_at: datetime
+    updated_at: datetime
+
+
+class LibraryFilesPageResponse(WireModel):
+    items: tuple[LibraryFileResponse, ...]
+    total: int
+    offset: int
+    limit: int
+
+
+class LibraryFileUploadResponse(WireModel):
+    library_file: LibraryFileResponse
+    duplicate: bool
+
+
+class LibraryFileIngestionResponse(WireModel):
+    library_file: LibraryFileResponse
+    paper: PaperResponse
+    ingestion_job: IngestionJobResponse
+    duplicate: bool
+
+
+class LibraryScanFailureResponse(WireModel):
+    code: str
+    message: str
+
+
+class LibraryScanResponse(WireModel):
+    scan_id: str
+    status: LibraryScanStatus
+    discovered_count: int
+    registered_count: int
+    unchanged_count: int
+    duplicate_count: int
+    excluded_count: int
+    skipped_count: int
+    failed_count: int
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    failure: LibraryScanFailureResponse | None
+
+
+class LibraryInfoResponse(WireModel):
+    root_path: str
+    supported_extensions: tuple[str, ...]
+    scan_in_progress: bool
+    latest_scan: LibraryScanResponse | None
+
+
+class LibraryScanItemResponse(WireModel):
+    relative_path: str
+    outcome: LibraryScanItemOutcome
+    library_file_id: str | None
+    paper_id: str | None
+    code: str | None
+    message: str | None
+
+
+class LibraryScanItemsPageResponse(WireModel):
+    items: tuple[LibraryScanItemResponse, ...]
+    total: int
+    offset: int
+    limit: int

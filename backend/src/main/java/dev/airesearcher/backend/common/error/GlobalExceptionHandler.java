@@ -16,6 +16,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.List;
 
@@ -77,7 +78,11 @@ public class GlobalExceptionHandler {
         );
     }
 
-    @ExceptionHandler({HandlerMethodValidationException.class, ConstraintViolationException.class})
+    @ExceptionHandler({
+            HandlerMethodValidationException.class,
+            ConstraintViolationException.class,
+            MethodArgumentTypeMismatchException.class
+    })
     public ResponseEntity<Object> handleMethodValidation(Exception exception, HttpServletRequest request) {
         return errorResponse(
                 ResultCode.INVALID_REQUEST,
@@ -153,7 +158,9 @@ public class GlobalExceptionHandler {
 
     private boolean isFileRequest(HttpServletRequest request) {
         String uri = request.getRequestURI();
-        return uri.startsWith("/api/v1/papers/") && uri.endsWith("/file");
+        boolean paperFile = uri.startsWith("/api/v1/papers/") && uri.endsWith("/file");
+        boolean libraryFile = uri.startsWith("/api/v1/library/files/") && uri.endsWith("/file");
+        return paperFile || libraryFile;
     }
 
     private String defaultReason(String reason) {

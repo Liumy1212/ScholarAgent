@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 
+from airesearcher_agent.application.library_files import LibraryFileService
+from airesearcher_agent.application.library_lifecycle import LibraryLifecycleService
+from airesearcher_agent.application.library_scans import LibraryScanService
 from airesearcher_agent.application.papers import PaperService
 from airesearcher_agent.application.runs import AgentRunStore
 from airesearcher_agent.application.stream_chat import StreamChatUseCase
@@ -16,6 +19,9 @@ from airesearcher_agent.retrieval.tools import RetrievalTools
 class RuntimeServices:
     settings: Settings
     database: Database
+    library_file_service: LibraryFileService
+    library_lifecycle_service: LibraryLifecycleService
+    library_scan_service: LibraryScanService
     paper_service: PaperService
     stream_chat: StreamChatUseCase
 
@@ -45,13 +51,30 @@ def build_runtime(settings: Settings | None = None) -> RuntimeServices:
         run_store=AgentRunStore(database),
         settings=selected,
     )
+    library_file_service = LibraryFileService(database=database, settings=selected)
+    library_scan_service = LibraryScanService(
+        database=database,
+        settings=selected,
+        library_file_service=library_file_service,
+    )
+    library_lifecycle_service = LibraryLifecycleService(
+        database=database,
+        settings=selected,
+        vector_store=vector_store,
+        library_file_service=library_file_service,
+    )
     return RuntimeServices(
         settings=selected,
         database=database,
+        library_file_service=library_file_service,
+        library_lifecycle_service=library_lifecycle_service,
+        library_scan_service=library_scan_service,
         paper_service=PaperService(
             database=database,
             settings=selected,
             vector_store=vector_store,
+            library_file_service=library_file_service,
+            library_lifecycle_service=library_lifecycle_service,
         ),
         stream_chat=StreamChatUseCase(provider),
     )

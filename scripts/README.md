@@ -17,7 +17,9 @@
 .\scripts\start-dev.ps1
 ```
 
-脚本读取根目录 `.env`，当前要求仓库外的 `AIRESEARCHER_STORAGE_DIR` 和模型缓存目录。
+脚本读取根目录 `.env`，要求 `AIRESEARCHER_PAPER_LIBRARY_DIR` 位于仓库内被 Git 忽略的
+`.private/` 子目录，并要求模型缓存位于仓库外。`-CheckOnly` 只验证边界，不创建目录；
+正常启动会准备 `originals/` 与 `.staging/`。
 完整环境、首次部署、再次运行、停止和手动启动见
 [Windows 本地部署与运行](../docs/deployment.md)。
 

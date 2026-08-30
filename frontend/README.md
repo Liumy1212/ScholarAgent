@@ -1,10 +1,11 @@
 # Frontend
 
-AIResearcher 的 React 19 浏览器客户端。当前提供单 PDF 上传、入库状态与重试、删除、原生
-PDF 预览，以及工具状态、SSE 回答和页码引用。
+AIResearcher 的 React 19 浏览器客户端。当前提供统一原件清单、只登记 PDF 上传、目录扫描、
+逐篇手动入库、状态与重试、排除/恢复、原件 PDF 预览，以及工具状态、SSE 回答和页码引用。
 
-浏览器只调用 Java 的 `/api/v1/**`。本地论文原件库的扫描和排除/恢复已经进入 Web API
-契约，但尚未进入当前 UI，状态见 [路线图阶段 1.4](../docs/roadmap.md)。
+浏览器只调用 Java 的 `/api/v1/**`，不读取本地目录。Chat 只列出 `searchable=true` 的论文，
+浏览器不提供原件硬删除。完整三端验收状态见
+[路线图阶段 1.4](../docs/roadmap.md)。
 
 ## 目录结构
 

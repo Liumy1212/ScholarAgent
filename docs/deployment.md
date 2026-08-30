@@ -3,8 +3,9 @@
 本文是 AIResearcher 当前唯一的完整本地运行说明，适用于 Windows 10/11 从源码首次部署和
 后续再次运行。当前尚未提供 Linux/macOS 等价启动脚本，也没有全栈生产部署方案。
 
-当前运行时使用仓库外的 `AIRESEARCHER_STORAGE_DIR` 保存 PDF。机器可读契约中规划的
-`.private/paper-library` 尚未进入 Agent、Backend、Frontend 和启动配置，不能用于当前部署。
+当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理论文原件，默认值为仓库内被 Git
+忽略的 `.private/paper-library`。三端已支持原件登记、扫描、手动入库及排除/恢复，并已
+通过本文所述的合成 PDF 全栈冒烟；以下步骤继续作为本机复验流程。
 
 ## 1. 环境与版本要求
 
@@ -12,6 +13,7 @@
 | --- | --- | --- |
 | Windows | Windows 10/11 | 当前支持的本地开发平台 |
 | PowerShell | PowerShell 7，命令为 `pwsh` | 启动脚本和应用终端 |
+| Git | 可使用 `git` 命令 | 验证本地原件库不会被提交 |
 | Docker Desktop | 已启动，支持 Compose v2 | 运行 MySQL 与 Qdrant |
 | Conda | Miniconda 或 Anaconda | 隔离 Python Agent 环境 |
 | Python | 3.12 | Agent API、Worker 与 RAG |
@@ -108,7 +110,7 @@ Copy-Item .\.env.example .\.env
 | `DEEPSEEK_API_KEY` | 替换为真实 API Key，不能保留模板占位符 |
 | `AIRESEARCHER_DB_PASSWORD` | MySQL 应用用户随机密码 |
 | `AIRESEARCHER_DB_ROOT_PASSWORD` | 与应用密码不同的 MySQL root 随机密码 |
-| `AIRESEARCHER_STORAGE_DIR` | 当前 PDF storage，必须位于仓库外 |
+| `AIRESEARCHER_PAPER_LIBRARY_DIR` | 必须位于仓库的 `.private/` 子目录并被 Git 忽略 |
 | `AIRESEARCHER_MODEL_CACHE_DIR` | embedding/reranker 缓存，必须位于仓库外 |
 
 可以用以下命令分别生成两个不同密码：
@@ -117,20 +119,24 @@ Copy-Item .\.env.example .\.env
 ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')).Substring(0,48)
 ```
 
-Windows 路径建议使用正斜杠：
+推荐保持模板中的受控相对路径；Windows 仓库外路径建议使用正斜杠：
 
 ```dotenv
-AIRESEARCHER_STORAGE_DIR=C:/Users/your-name/.airesearcher/storage
+AIRESEARCHER_PAPER_LIBRARY_DIR=.private/paper-library
 AIRESEARCHER_MODEL_CACHE_DIR=C:/Users/your-name/.cache/airesearcher/models
 ```
 
-Agent 会在 storage 中创建：
+正常启动会创建：
 
 ```text
-storage/
-├─ papers/       已登记 PDF
-└─ uploads/      上传过程临时文件
+.private/paper-library/
+├─ originals/          用户管理的 PDF 原件
+│  └─ uploads/         网页/API 上传的原件
+└─ .staging/           上传校验与原子落盘暂存
 ```
+
+`-CheckOnly` 不会创建这些目录。`AIRESEARCHER_STORAGE_DIR` 仅在旧数据迁移期间可选保留，
+新上传不会再写入该目录。
 
 #### 数据库与 Qdrant
 
@@ -175,8 +181,8 @@ volume 内的账户或密码。
 
 1. `.env` 语法、必填变量和占位符。
 2. 两个数据库密码是否不同。
-3. storage 与模型缓存是否位于仓库外。
-4. PowerShell、Docker、Conda、Java、Node.js、pnpm 和 Maven Wrapper。
+3. 原件库是否位于仓库的 `.private/` 子目录且确实被 Git 忽略，模型缓存是否位于仓库外。
+4. PowerShell、Git、Docker、Conda、Java、Node.js、pnpm 和 Maven Wrapper。
 5. Agent 与 Frontend 依赖。
 6. Compose 配置。
 
@@ -192,11 +198,12 @@ volume 内的账户或密码。
 
 脚本按以下顺序工作：
 
-1. 再次校验配置、工具和项目依赖。
-2. 确认 Agent、Java 和 React 端口未被占用。
-3. 启动 MySQL 与 Qdrant，并等待健康检查。
-4. 执行 `alembic upgrade head`。
-5. 分别打开 Agent API、Worker、Java BFF 和 React 的 PowerShell 终端。
+1. 再次校验配置、原件库边界、Git 忽略规则、工具和项目依赖。
+2. 创建原件库的 `originals/` 与 `.staging/`。
+3. 确认 Agent、Java 和 React 端口未被占用。
+4. 启动 MySQL 与 Qdrant，并等待健康检查。
+5. 执行 `alembic upgrade head`。
+6. 分别打开 Agent API、Worker、Java BFF 和 React 的 PowerShell 终端。
 
 启动命令可以从任意当前目录调用，也可以显式指定其他环境文件：
 
@@ -215,23 +222,37 @@ C:\path\to\AIResearcher\scripts\start-dev.ps1 -EnvFile C:\private\airesearcher.e
 docker compose --env-file .\.env -f .\infrastructure\compose.yaml ps
 Invoke-WebRequest http://127.0.0.1:6333/healthz -UseBasicParsing
 Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/library
 Invoke-RestMethod http://127.0.0.1:8080/api/v1/papers
 Invoke-WebRequest http://127.0.0.1:5173 -UseBasicParsing
 ```
 
 Compose 中 MySQL 应显示 `healthy`，Qdrant 健康端点应返回成功。
 
-### 3.2 PDF 与 RAG 冒烟
+### 3.2 原件库与 RAG 冒烟
 
-1. 打开 <http://127.0.0.1:5173>。
-2. 上传一个不超过 50 MB、500 页的文本型 PDF。
-3. 等待入库状态进入 `READY`；失败时查看 Worker 和 Agent 终端。
-4. 打开论文详情并确认浏览器能够预览 PDF。
-5. 提出一个必须依赖论文内容的问题。
-6. 确认页面出现检索/重排工具状态、流式回答和页码引用。
-7. 点击引用，确认跳转到正确 PDF 页。
+先在仓库外生成合成 PDF，再复制到原件库；生成器会拒绝直接写入仓库：
 
-测试只使用用户有权处理的论文。仓库测试资产必须使用合成或可再分发内容。
+```powershell
+$demoPdf = Join-Path $env:TEMP 'airesearcher-demo.pdf'
+conda run -n airesearcher-agent python .\scripts\generate_demo_pdf.py $demoPdf
+New-Item -ItemType Directory .\.private\paper-library\originals\smoke -Force
+Copy-Item -LiteralPath $demoPdf -Destination .\.private\paper-library\originals\smoke\demo.pdf
+```
+
+随后通过 Java API 执行以下闭环：
+
+1. `POST /api/v1/library/scans`，轮询返回的 `scanId` 到 `SUCCEEDED`。
+2. `GET /api/v1/library/files`，确认 `smoke/demo.pdf` 为 `AVAILABLE + NOT_INGESTED`。
+3. 对其调用 `POST /api/v1/library/files/{libraryFileId}/ingestion`，轮询任务到 `READY`。
+4. 打开 <http://127.0.0.1:5173> 的问答页，完成检索、引用和 PDF Range 预览验证。
+5. 调用 `POST /api/v1/papers/{paperId}/exclusion`，确认其不可检索；再调用对应 `DELETE`
+   恢复并等待重新入库。
+6. 分别移动、替换和移走合成 PDF，每次重新扫描并核对 `MOVED`、`REPLACED`、`MISSING`。
+
+当前版本已使用合成 PDF 完成上述闭环，并在 React 页面验证原件库路径、手动扫描、统一清单、
+`MISSING/REPLACED` 禁用状态及 Chat 的可检索论文过滤。复验仍只使用合成或用户有权处理的
+论文。
 
 ## 4. 后续再次运行
 
@@ -252,7 +273,7 @@ Compose 中 MySQL 应显示 `healthy`，Qdrant 健康端点应返回成功。
    ```
 
 脚本每次都会执行幂等的 `alembic upgrade head`。普通停止不会删除 MySQL/Qdrant named
-volume，也不会删除 `AIRESEARCHER_STORAGE_DIR` 中的 PDF 或模型缓存。
+volume，也不会删除 `AIRESEARCHER_PAPER_LIBRARY_DIR` 中的原件或模型缓存。
 
 若只有单个应用代码发生变化，可以在对应应用终端按 `Ctrl+C` 后重新运行该应用命令；
 不需要重建 MySQL、Qdrant 或其他应用。
@@ -355,17 +376,40 @@ pnpm dev
 
 | 数据 | 默认或配置位置 | 普通 `down` 是否保留 |
 | --- | --- | --- |
-| PDF | `AIRESEARCHER_STORAGE_DIR/papers/` | 是 |
-| 上传临时文件 | `AIRESEARCHER_STORAGE_DIR/uploads/` | 是 |
+| PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/originals/` | 是 |
+| 上传暂存 | `AIRESEARCHER_PAPER_LIBRARY_DIR/.staging/` | 是 |
 | embedding/reranker | `AIRESEARCHER_MODEL_CACHE_DIR` | 是 |
 | MySQL | `airesearcher_mysql_data` named volume | 是 |
 | Qdrant | `airesearcher_qdrant_data` named volume | 是 |
 | 本机配置 | 根目录 `.env` | 是 |
 
-备份至少需要覆盖 PDF storage、MySQL 和 Qdrant。只备份数据库而不备份 PDF，或只备份 PDF
+备份至少需要覆盖原件库、MySQL 和 Qdrant。只备份数据库而不备份 PDF，或只备份 PDF
 而不保留数据库/向量，都不能完整恢复当前知识库。
 
-## 8. 常见问题
+## 8. 从旧 PDF storage 迁移
+
+迁移不会自动移动或删除任何文件，也不会自动清理数据库或向量。开始前必须停止四个应用，
+并分别备份旧 `AIRESEARCHER_STORAGE_DIR`、MySQL 和 Qdrant。
+
+1. 在现有 `.env` 中新增 `AIRESEARCHER_PAPER_LIBRARY_DIR=.private/paper-library`；迁移验证完成前
+   保留原 `AIRESEARCHER_STORAGE_DIR`。
+2. 运行 `start-dev.ps1 -CheckOnly`，确认新目录边界与 Git 忽略规则通过。
+3. 正常启动一次，让 Alembic 升级到最新 schema 并创建 `originals/`、`.staging/`。
+4. 使用 `Copy-Item` 把需要保留的旧 PDF 复制到 `originals/` 下自选子目录；不要使用移动或
+   删除命令，也不要复制旧上传临时文件。
+5. 创建并完成一次扫描。扫描会按 SHA-256 把复制原件关联到既有 Paper，不重新创建 Paper、
+   入库任务、chunk 或向量。
+6. 核对原件数量、相对路径、Paper 关联和抽样 PDF 预览。没有匹配到可用原件的旧论文显示为
+   `MISSING` 且不可检索；不要在未查明原因前删除其旧文件或数据库记录。
+7. 只有备份和关联验证都完成后，才可从日常配置中移除可选的
+   `AIRESEARCHER_STORAGE_DIR`。本项目不会删除旧目录。
+
+## 9. 常见问题
+
+### 原件库路径校验失败
+
+保持 `AIRESEARCHER_PAPER_LIBRARY_DIR=.private/paper-library`，并确认仓库根 `.gitignore` 仍
+包含 `/.private/`。不要把原件库改到仓库其他目录，也不要强制添加其中的 PDF。
 
 ### API Key 或密码仍是占位符
 

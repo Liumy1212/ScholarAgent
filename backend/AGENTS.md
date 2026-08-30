@@ -13,10 +13,10 @@ These instructions extend the repository root `AGENTS.md` for work under `backen
 
 ## Current implementation
 
-- The current BFF proxies single-paper upload/list/detail/delete, ingestion status/retry, PDF Range,
-  and streaming answers.
-- Accepted library scan and exclusion contracts are not implemented in Java yet. Implement them as
-  a bounded consumer task without changing the accepted wire shape.
+- The current BFF proxies library files, manual ingestion, scans, exclusion/restore, PDF Range, and
+  streaming answers, while retaining compatibility paper routes.
+- The Frontend uses the unified library workflow. Keep compatibility routes for older clients
+  until a separate removal task explicitly changes the accepted contracts.
 
 ## Responses and streaming
 

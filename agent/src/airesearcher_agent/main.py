@@ -29,7 +29,15 @@ def create_app(
         request_validation_error_handler,
     )
     application.add_exception_handler(AgentError, agent_error_handler)
-    application.include_router(create_agent_router(use_case, services.paper_service))
+    application.include_router(
+        create_agent_router(
+            use_case,
+            services.paper_service,
+            services.library_file_service,
+            services.library_lifecycle_service,
+            services.library_scan_service,
+        )
+    )
 
     @application.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:

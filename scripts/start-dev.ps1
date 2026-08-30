@@ -84,16 +84,47 @@ function Require-EnvironmentValue {
     }
 }
 
+function Resolve-ConfiguredPath {
+    param([Parameter(Mandatory)][string]$Value)
+    if ([System.IO.Path]::IsPathRooted($Value)) {
+        return [System.IO.Path]::GetFullPath($Value)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $Value))
+}
+
 function Assert-OutsideRepository {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Value
     )
-    $resolved = [System.IO.Path]::GetFullPath($Value)
+    $resolved = Resolve-ConfiguredPath -Value $Value
     $rootWithSeparator = $RepositoryRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
     if ($resolved.Equals($RepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
         $resolved.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
         Fail "$Name 必须指向仓库外目录，当前值为 $resolved。"
+    }
+}
+
+function Assert-PaperLibraryBoundary {
+    param([Parameter(Mandatory)][string]$Value)
+    $resolved = Resolve-ConfiguredPath -Value $Value
+    $privateRoot = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot '.private'))
+    $privateRootWithSeparator = $privateRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if ($resolved.Equals($privateRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $resolved.StartsWith($privateRootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Fail "AIRESEARCHER_PAPER_LIBRARY_DIR 必须位于仓库的 .private 子目录中，当前值为 $resolved。"
+    }
+    return $resolved
+}
+
+function Assert-GitIgnored {
+    param(
+        [Parameter(Mandatory)][string]$GitPath,
+        [Parameter(Mandatory)][string]$Path
+    )
+    & $GitPath -C $RepositoryRoot check-ignore --quiet --no-index -- $Path
+    if ($LASTEXITCODE -ne 0) {
+        Fail "AIRESEARCHER_PAPER_LIBRARY_DIR 未被 Git 忽略：$Path。"
     }
 }
 
@@ -138,7 +169,7 @@ $RequiredValues = @(
     'AIRESEARCHER_DB_PASSWORD',
     'AIRESEARCHER_DB_ROOT_PASSWORD',
     'AIRESEARCHER_QDRANT_URL',
-    'AIRESEARCHER_STORAGE_DIR',
+    'AIRESEARCHER_PAPER_LIBRARY_DIR',
     'AIRESEARCHER_MODEL_CACHE_DIR'
 )
 foreach ($name in $RequiredValues) {
@@ -158,8 +189,12 @@ foreach ($name in @('DEEPSEEK_API_KEY', 'AIRESEARCHER_DB_PASSWORD', 'AIRESEARCHE
 if ($EnvironmentValues['AIRESEARCHER_DB_PASSWORD'] -eq $EnvironmentValues['AIRESEARCHER_DB_ROOT_PASSWORD']) {
     Fail 'AIRESEARCHER_DB_PASSWORD 与 AIRESEARCHER_DB_ROOT_PASSWORD 必须使用不同密码。'
 }
-Assert-OutsideRepository -Name 'AIRESEARCHER_STORAGE_DIR' -Value $EnvironmentValues['AIRESEARCHER_STORAGE_DIR']
+$PaperLibraryDirectory = Assert-PaperLibraryBoundary -Value $EnvironmentValues['AIRESEARCHER_PAPER_LIBRARY_DIR']
 Assert-OutsideRepository -Name 'AIRESEARCHER_MODEL_CACHE_DIR' -Value $EnvironmentValues['AIRESEARCHER_MODEL_CACHE_DIR']
+if ($EnvironmentValues.ContainsKey('AIRESEARCHER_STORAGE_DIR') -and
+    -not [string]::IsNullOrWhiteSpace($EnvironmentValues['AIRESEARCHER_STORAGE_DIR'])) {
+    Assert-OutsideRepository -Name 'AIRESEARCHER_STORAGE_DIR' -Value $EnvironmentValues['AIRESEARCHER_STORAGE_DIR']
+}
 
 foreach ($entry in $EnvironmentValues.GetEnumerator()) {
     if ($entry.Key -ne 'AIRESEARCHER_DB_ROOT_PASSWORD') {
@@ -174,10 +209,12 @@ $Conda = Get-RequiredCommand -Name 'conda' -InstallHint '请安装 Miniconda 或
 $Java = Get-RequiredCommand -Name 'java' -InstallHint '请安装 JDK 21。'
 $Node = Get-RequiredCommand -Name 'node' -InstallHint '请安装 Node.js 22.13 或更高版本。'
 $Pnpm = Get-RequiredCommand -Name 'pnpm' -InstallHint '请安装 pnpm 11。'
+$Git = Get-RequiredCommand -Name 'git' -InstallHint '请安装 Git。'
 $MavenWrapper = Join-Path $RepositoryRoot 'backend\mvnw.cmd'
 if (-not (Test-Path -LiteralPath $MavenWrapper -PathType Leaf)) {
     Fail '未找到 backend/mvnw.cmd，仓库内容不完整。'
 }
+Assert-GitIgnored -GitPath $Git -Path $PaperLibraryDirectory
 
 $javaVersion = (& $Java -version 2>&1 | Out-String)
 if ($javaVersion -notmatch 'version "21[\.]') {
@@ -225,9 +262,13 @@ Invoke-Checked -FilePath $Docker -Arguments @(
 ) -FailureMessage 'Docker Compose 配置校验失败。请检查 .env 和 infrastructure/compose.yaml。'
 
 if ($CheckOnly) {
-    Write-Host "`n检查通过：配置、本机工具与项目依赖均可用。" -ForegroundColor Green
+    Write-Host "`n检查通过：配置、原件库边界、Git 忽略规则、本机工具与项目依赖均可用。" -ForegroundColor Green
     exit 0
 }
+
+Write-Step '准备本地论文原件库目录'
+New-Item -ItemType Directory -Path (Join-Path $PaperLibraryDirectory 'originals') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $PaperLibraryDirectory '.staging') -Force | Out-Null
 
 Write-Step '检查应用端口'
 Assert-PortAvailable -Port 8000 -Service 'Agent API'

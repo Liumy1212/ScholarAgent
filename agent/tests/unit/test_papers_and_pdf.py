@@ -44,7 +44,9 @@ def _write_blank_pdf(path: Path) -> None:
     document.close()  # type: ignore[no-untyped-call]
 
 
-def test_upload_streams_to_external_storage_and_sha256_deduplicates(tmp_path: Path) -> None:
+def test_compatibility_upload_reuses_original_library_and_sha256_deduplicates(
+    tmp_path: Path,
+) -> None:
     settings = runtime_settings(tmp_path)
     database = sqlite_database()
     vectors = RecordingVectorStore()
@@ -57,10 +59,30 @@ def test_upload_streams_to_external_storage_and_sha256_deduplicates(tmp_path: Pa
     assert first.duplicate is False
     assert second.duplicate is True
     assert second.paper.paper_id == first.paper.paper_id
+    assert first.paper.library_relative_path == "uploads/research.pdf"
+    assert first.paper.source_status.value == "AVAILABLE"
+    assert first.paper.searchable is False
     stored = service.get_file(first.paper.paper_id)
-    assert Path(stored.path).is_relative_to(settings.storage_dir / "papers")
+    assert Path(stored.path).is_relative_to(settings.paper_library_originals_dir / "uploads")
     assert Path(stored.path).read_bytes() == content
-    assert len(list((settings.storage_dir / "papers").glob("*.pdf"))) == 1
+    assert len(list((settings.paper_library_originals_dir / "uploads").glob("*.pdf"))) == 1
+    assert not (settings.storage_dir / "papers").exists()
+
+
+def test_compatibility_delete_preserves_registered_original(tmp_path: Path) -> None:
+    settings = runtime_settings(tmp_path)
+    database = sqlite_database()
+    vectors = RecordingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    uploaded = asyncio.run(
+        service.upload(MemoryUpload(b"%PDF-1.7\npreserved original", filename="keep.pdf"))
+    )
+    stored_path = Path(service.get_file(uploaded.paper.paper_id).path)
+
+    service.delete_paper(uploaded.paper.paper_id)
+
+    assert stored_path.read_bytes() == b"%PDF-1.7\npreserved original"
+    assert vectors.deleted_papers == [uploaded.paper.paper_id]
 
 
 @pytest.mark.parametrize(

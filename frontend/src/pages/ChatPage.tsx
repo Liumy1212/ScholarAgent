@@ -162,7 +162,7 @@ export function ChatPage() {
     const controller = new AbortController();
     void listPapers(controller.signal)
       .then((result) => {
-        const ready = result.items.filter((paper) => paper.status === 'READY');
+        const ready = result.items.filter((paper) => paper.searchable);
         setReadyPapers(ready);
         setSelectedPaperId((current) =>
           current && ready.some((paper) => paper.paperId === current)
@@ -288,7 +288,7 @@ export function ChatPage() {
       <Space direction="vertical" size={24} className="full-width">
         <div>
           <Tag color={selectedPaper ? 'geekblue' : 'default'}>
-            {selectedPaper ? selectedPaper.title : '全部 READY 论文'}
+            {selectedPaper ? selectedPaper.title : '全部可检索论文'}
           </Tag>
           <Typography.Title id="chat-title" level={2}>
             论文问答
@@ -307,7 +307,7 @@ export function ChatPage() {
                 allowClear
                 disabled={active}
                 value={selectedPaperId}
-                placeholder="全部 READY 论文"
+                placeholder="全部可检索论文"
                 options={readyPapers.map((paper) => ({
                   value: paper.paperId,
                   label: `${paper.title}${paper.pageCount ? ` · ${paper.pageCount} 页` : ''}`,
@@ -322,7 +322,7 @@ export function ChatPage() {
                   className="field-alert"
                   type="info"
                   showIcon
-                  message="知识库中还没有 READY 论文；此时只能得到模型知识回答。"
+                  message="知识库中还没有可检索论文；此时只能得到模型知识回答。"
                 />
               ) : null}
             </Form.Item>
@@ -351,7 +351,7 @@ export function ChatPage() {
                 </Button>
               ) : null}
               <Typography.Text type="secondary">
-                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : '检索全部 READY 论文'}
+                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : '检索全部可检索论文'}
               </Typography.Text>
             </Flex>
           </Form>

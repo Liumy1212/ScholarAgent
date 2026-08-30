@@ -3,9 +3,9 @@
 AIResearcher 的 Java Web Backend/BFF。React 只通过本应用访问 Python Agent；本模块没有论文
 数据库、PDF 解析、RAG、Prompt 或模型逻辑。
 
-当前实现代理单篇论文上传、列表、详情、删除、入库任务、PDF Range 和流式问答。本地原件库
-扫描与排除/恢复已经进入目标契约，但尚未进入 Java 实现，状态见
-[路线图阶段 1.4](../docs/roadmap.md)。
+当前实现代理原件库信息、分页清单、只登记上传、手动入库、扫描、扫描项、排除/恢复、
+PDF Range 和流式问答，并暂时保留旧单篇论文接口。React 是否已消费这些接口以
+[路线图阶段 1.4](../docs/roadmap.md)为准。
 
 ## 目录结构
 
@@ -13,6 +13,7 @@ AIResearcher 的 Java Web Backend/BFF。React 只通过本应用访问 Python Ag
 | --- | --- |
 | `src/main/java/dev/airesearcher/backend/common/` | `Result<T>`、错误与请求 ID |
 | `src/main/java/dev/airesearcher/backend/integration/agent/` | Python Agent client 与下游 DTO |
+| `src/main/java/dev/airesearcher/backend/library/` | 原件库、扫描与知识库生命周期 Web API |
 | `src/main/java/dev/airesearcher/backend/paper/` | 论文、入库和 PDF Web API |
 | `src/main/java/dev/airesearcher/backend/chat/` | POST SSE 控制、状态与下游取消 |
 | `src/main/resources/application.properties` | Agent 地址与超时配置 |

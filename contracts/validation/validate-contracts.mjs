@@ -20,6 +20,9 @@ const stableStreamFields = [
 const httpMethods = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const routeDefinitions = [
   { suffix: "/library", methods: ["get"], kind: "json" },
+  { suffix: "/library/files", methods: ["get", "post"], kind: "json" },
+  { suffix: "/library/files/{libraryFileId}/file", methods: ["get"], kind: "pdf" },
+  { suffix: "/library/files/{libraryFileId}/ingestion", methods: ["post"], kind: "json" },
   { suffix: "/library/scans", methods: ["post"], kind: "json", successStatus: "202" },
   { suffix: "/library/scans/{scanId}", methods: ["get"], kind: "json" },
   { suffix: "/library/scans/{scanId}/items", methods: ["get"], kind: "json" },
@@ -575,13 +578,21 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     }
   }
 
-  const upload = dereferenced.paths[`${prefix}/papers`].post;
-  const uploadSchema = upload.requestBody.content["multipart/form-data"].schema;
-  assert.equal(uploadSchema.type, "object", `${sourceName}: 上传必须是 multipart object`);
-  assert.equal(uploadSchema.additionalProperties, false, `${sourceName}: 上传不得包含额外 part`);
-  assert.deepEqual(uploadSchema.required, ["file"], `${sourceName}: 上传必须且只能要求 file`);
-  assert.deepEqual(Object.keys(uploadSchema.properties), ["file"], `${sourceName}: 上传只能定义 file`);
-  assert.equal(uploadSchema.properties.file.format, "binary", `${sourceName}: file 必须是 binary`);
+  for (const uploadPath of [`${prefix}/papers`, `${prefix}/library/files`]) {
+    const upload = dereferenced.paths[uploadPath].post;
+    const uploadSchema = upload.requestBody.content["multipart/form-data"].schema;
+    assert.equal(uploadSchema.type, "object", `${sourceName}: ${uploadPath} 必须是 multipart object`);
+    assert.equal(uploadSchema.additionalProperties, false, `${sourceName}: ${uploadPath} 不得包含额外 part`);
+    assert.deepEqual(uploadSchema.required, ["file"], `${sourceName}: ${uploadPath} 必须且只能要求 file`);
+    assert.deepEqual(Object.keys(uploadSchema.properties), ["file"], `${sourceName}: ${uploadPath} 只能定义 file`);
+    assert.equal(uploadSchema.properties.file.format, "binary", `${sourceName}: ${uploadPath} file 必须是 binary`);
+  }
+
+  assert.equal(
+    dereferenced.paths[`${prefix}/papers`].post.deprecated,
+    true,
+    `${sourceName}: 兼容性 POST /papers 必须标记 deprecated`,
+  );
 
   const paperSchema = dereferenced.components.schemas.Paper;
   assert.deepEqual(
@@ -598,12 +609,61 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     assert.ok(paperSchema.required.includes(field), `${sourceName}: Paper 必须要求 ${field}`);
   }
 
+  const libraryFileSchema = dereferenced.components.schemas.LibraryFile;
+  assert.deepEqual(
+    libraryFileSchema.properties.knowledgeStatus.enum,
+    ["NOT_INGESTED", "PROCESSING", "READY", "FAILED", "EXCLUDED"],
+    `${sourceName}: LibraryFileKnowledgeStatus 枚举不正确`,
+  );
+  for (const field of [
+    "libraryFileId",
+    "relativePath",
+    "sha256",
+    "sourceStatus",
+    "knowledgeStatus",
+    "paperId",
+    "searchable",
+    "currentIngestion",
+  ]) {
+    assert.ok(libraryFileSchema.required.includes(field), `${sourceName}: LibraryFile 必须要求 ${field}`);
+  }
+
+  const listLibraryFiles = dereferenced.paths[`${prefix}/library/files`].get;
+  const libraryFileQueryNames = listLibraryFiles.parameters
+    .filter((parameter) => parameter.in === "query")
+    .map((parameter) => parameter.name)
+    .sort();
+  assert.deepEqual(
+    libraryFileQueryNames,
+    ["limit", "offset"],
+    `${sourceName}: 原件清单分页参数不完整`,
+  );
+
+  const uploadLibraryFile = dereferenced.paths[`${prefix}/library/files`].post;
+  assert.match(
+    uploadLibraryFile.description,
+    /仅登记|不创建入库任务|另行调用 ingestion/u,
+    `${sourceName}: 原件上传必须冻结只登记、不自动入库语义`,
+  );
+
+  const ingestLibraryFile = dereferenced.paths[`${prefix}/library/files/{libraryFileId}/ingestion`].post;
+  assert.match(
+    ingestLibraryFile.description,
+    /扫描和上传本身绝不调用此操作/u,
+    `${sourceName}: 手动入库边界必须明确`,
+  );
+
   const createScan = dereferenced.paths[`${prefix}/library/scans`].post;
   assert.ok(createScan.responses["202"], `${sourceName}: 创建扫描必须返回 202`);
   assert.equal(
     createScan.responses["409"].content["application/json"].example.code,
     "LIBRARY_SCAN_ACTIVE",
     `${sourceName}: 活动扫描冲突错误码必须固定`,
+  );
+  assert.match(
+    dereferenced.components.schemas.LibraryScan.properties.registeredCount.description,
+    /登记.*不会自动创建.*入库任务/u,
+    `${sourceName}: registeredCount 必须表示原件登记而非自动入库`,
   );
 
   const scanItems = dereferenced.paths[`${prefix}/library/scans/{scanId}/items`].get;
@@ -612,6 +672,10 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     .map((parameter) => parameter.name)
     .sort();
   assert.deepEqual(queryNames, ["limit", "offset", "outcome"], `${sourceName}: 扫描项分页/过滤参数不完整`);
+  assert.ok(
+    dereferenced.components.schemas.LibraryScanItem.required.includes("libraryFileId"),
+    `${sourceName}: 扫描项必须返回可空 libraryFileId`,
+  );
 
   validateInlineExamples(dereferenced, sourceName);
   return { parsed, dereferenced };
@@ -627,6 +691,7 @@ async function validateOpenApis() {
     "Identifier",
     "PaperStatus",
     "PaperSourceStatus",
+    "LibraryFileKnowledgeStatus",
     "LibraryScanStatus",
     "LibraryScanItemOutcome",
     "IngestionJobStatus",
@@ -635,6 +700,8 @@ async function validateOpenApis() {
     "IngestionSummary",
     "Paper",
     "IngestionJob",
+    "LibraryFile",
+    "LibraryFilesPage",
     "LibraryScanFailure",
     "LibraryScan",
     "LibraryInfo",
@@ -659,6 +726,16 @@ async function validateOpenApis() {
     web.parsed.components.schemas.PaperListData,
     "论文列表 data DTO 必须跨 BFF 保持一致",
   );
+  assert.deepEqual(
+    agent.parsed.components.schemas.LibraryFileUploadResponse,
+    web.parsed.components.schemas.LibraryFileUploadData,
+    "原件上传 data DTO 必须跨 BFF 保持一致",
+  );
+  assert.deepEqual(
+    agent.parsed.components.schemas.LibraryFileIngestionResponse,
+    web.parsed.components.schemas.LibraryFileIngestionData,
+    "手动入库 data DTO 必须跨 BFF 保持一致",
+  );
 }
 
 async function main() {
@@ -666,11 +743,11 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents with 13 REST operations plus shared SSE");
+  console.log("- 2 OpenAPI documents with 16 REST operations plus shared SSE");
   console.log("- 2 JSON Schemas");
   console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");
-  console.log("- library scan/exclusion semantics, DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
+  console.log("- library file/manual ingestion/scan/exclusion semantics, DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
 }
 
 main().catch((error) => {

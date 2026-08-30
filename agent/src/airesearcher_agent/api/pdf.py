@@ -1,11 +1,26 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
 
 from airesearcher_agent.application.errors import AgentError
-from airesearcher_agent.domain.papers import StoredPaperFile
+
+
+class StoredPdfFile(Protocol):
+    @property
+    def path(self) -> str: ...
+
+    @property
+    def file_name(self) -> str: ...
+
+    @property
+    def file_size_bytes(self) -> int: ...
+
+    @property
+    def sha256(self) -> str: ...
+
 
 FILE_CHUNK_BYTES = 1024 * 1024
 
@@ -53,14 +68,14 @@ def _read_bytes(path: Path, start: int, length: int) -> Iterator[bytes]:
             yield block
 
 
-def paper_file_response(
-    paper: StoredPaperFile,
+def pdf_file_response(
+    pdf_file: StoredPdfFile,
     *,
     request_id: str,
     range_header: str | None,
 ) -> StreamingResponse:
-    path = Path(paper.path)
-    size = paper.file_size_bytes
+    path = Path(pdf_file.path)
+    size = pdf_file.file_size_bytes
     start, end = (0, size - 1) if range_header is None else _parse_range(range_header, size)
     content_length = end - start + 1
     status_code = 200 if range_header is None else 206
@@ -68,8 +83,8 @@ def paper_file_response(
         "X-Request-Id": request_id,
         "Accept-Ranges": "bytes",
         "Content-Length": str(content_length),
-        "ETag": f'"sha256-{paper.sha256}"',
-        "Content-Disposition": f"inline; filename*=UTF-8''{quote(paper.file_name)}",
+        "ETag": f'"sha256-{pdf_file.sha256}"',
+        "Content-Disposition": f"inline; filename*=UTF-8''{quote(pdf_file.file_name)}",
     }
     if status_code == 206:
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
@@ -79,3 +94,6 @@ def paper_file_response(
         media_type="application/pdf",
         headers=headers,
     )
+
+
+paper_file_response = pdf_file_response

@@ -7,6 +7,13 @@ class PaperStatus(StrEnum):
     PROCESSING = "PROCESSING"
     READY = "READY"
     FAILED = "FAILED"
+    EXCLUDED = "EXCLUDED"
+
+
+class PaperSourceStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    MISSING = "MISSING"
+    REPLACED = "REPLACED"
 
 
 class IngestionJobStatus(StrEnum):
@@ -52,7 +59,10 @@ class PaperView:
     publication_year: int | None
     file_name: str
     file_size_bytes: int
+    library_relative_path: str
+    source_status: PaperSourceStatus
     status: PaperStatus
+    searchable: bool
     page_count: int | None
     created_at: datetime
     updated_at: datetime

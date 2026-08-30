@@ -81,6 +81,38 @@ class AgentFileClientTest {
                 });
     }
 
+    @Test
+    void opensLibraryOriginalThroughItsDedicatedAgentPath() throws Exception {
+        AtomicReference<String> path = new AtomicReference<>();
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> {
+                    path.set(request.uri());
+                    return response.status(200)
+                            .header("Content-Type", "application/pdf")
+                            .header("Content-Length", "5")
+                            .header("Accept-Ranges", "bytes")
+                            .header("ETag", "\"sha256-library\"")
+                            .sendByteArray(Mono.just("%PDF-".getBytes()))
+                            .then();
+                })
+                .bindNow();
+
+        AgentFileResponse response = client().openLibraryFile(
+                "library-file-001",
+                null,
+                "req-library-file"
+        );
+
+        try (var body = response.body()) {
+            assertThat(body.readAllBytes()).isEqualTo("%PDF-".getBytes());
+        }
+        assertThat(path).hasValue("/agent-api/v1/library/files/library-file-001/file");
+        assertThat(response.headers().getFirst("Content-Length")).isEqualTo("5");
+        assertThat(response.headers().getETag()).isEqualTo("\"sha256-library\"");
+    }
+
     private AgentFileClient client() {
         URI baseUrl = URI.create("http://127.0.0.1:" + server.port());
         return new AgentFileClient(

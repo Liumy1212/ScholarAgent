@@ -111,6 +111,22 @@ textarea {
   max-width: 100%;
 }
 
+.library-location,
+.scan-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.library-location .ant-typography {
+  overflow-wrap: anywhere;
+}
+
+.scan-summary {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f7f9fd;
+}
+
 .center-state {
   display: flex;
   min-height: 150px;
@@ -157,6 +173,14 @@ textarea {
 
 .ingestion-error {
   margin-top: 4px;
+}
+
+.not-ingested-note.ant-typography {
+  margin: 14px 0 0;
+}
+
+.library-pagination {
+  padding-top: 18px;
 }
 
 .pdf-preview {

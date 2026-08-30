@@ -3,7 +3,7 @@ info:
   title: AIResearcher Web API
   version: 1.0.0
   description: >-
-    Java BFF 向 React 暴露的单篇论文 Demo API。React 只调用 /api/v1/**；
+    Java BFF 向 React 暴露的本地论文原件库与 RAG API。React 只调用 /api/v1/**；
     Java 代理 Python Agent，并为普通 JSON API 提供 Result<T>。
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
@@ -34,11 +34,124 @@ paths:
           $ref: '#/components/responses/JsonErrorResponse'
         '504':
           $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/library/files:
+    get:
+      tags: [Library]
+      operationId: listWebLibraryFiles
+      summary: 分页列出论文原件及其知识库对应状态
+      description: 原件清单独立于知识库论文；NOT_INGESTED 原件尚未创建 Paper 或入库任务。
+      parameters:
+        - $ref: '#/components/parameters/LibraryFilesOffset'
+        - $ref: '#/components/parameters/LibraryFilesLimit'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryFilesResultResponse'
+        '400':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+    post:
+      tags: [Library]
+      operationId: uploadWebLibraryFile
+      summary: 上传一篇 PDF 原件但不创建入库任务
+      description: >-
+        multipart 请求必须且只能包含一个名为 file 的 PDF，最大 50 MB。Java 不保存文件，
+        只把请求转发给 Agent；成功后客户端必须另行调用 ingestion 接口才会解析和建库。
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryFileUploadResultResponse'
+        '400':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '413':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '415':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '422':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/library/files/{libraryFileId}/file:
+    get:
+      tags: [Library]
+      operationId: getWebLibraryFile
+      summary: 预览或按 Range 读取已登记 PDF 原件
+      description: Java 必须保持下游 PDF Range 与错误体边界，不使用 Result 包装。
+      parameters:
+        - $ref: '#/components/parameters/LibraryFileId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+        - $ref: '#/components/parameters/OptionalRange'
+      responses:
+        '200':
+          $ref: '#/components/responses/PdfFile'
+        '206':
+          $ref: '#/components/responses/PdfPartialFile'
+        '400':
+          $ref: '#/components/responses/FileErrorResponse'
+        '404':
+          $ref: '#/components/responses/FileErrorResponse'
+        '409':
+          $ref: '#/components/responses/FileErrorResponse'
+        '416':
+          $ref: '#/components/responses/FileErrorResponse'
+        '500':
+          $ref: '#/components/responses/FileErrorResponse'
+        '502':
+          $ref: '#/components/responses/FileErrorResponse'
+        '504':
+          $ref: '#/components/responses/FileErrorResponse'
+  /api/v1/library/files/{libraryFileId}/ingestion:
+    post:
+      tags: [Library]
+      operationId: ingestWebLibraryFile
+      summary: 手动将一篇可用原件录入知识库
+      description: >-
+        创建 Paper 和后台入库任务；相同 SHA-256 已有 Paper 时复用既有论文和任务。
+        MISSING 或 REPLACED 原件返回冲突，扫描和上传本身绝不调用此操作。
+      parameters:
+        - $ref: '#/components/parameters/LibraryFileId'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/LibraryFileIngestionResultResponse'
+        '404':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '409':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '500':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '502':
+          $ref: '#/components/responses/JsonErrorResponse'
+        '504':
+          $ref: '#/components/responses/JsonErrorResponse'
   /api/v1/library/scans:
     post:
       tags: [Library]
       operationId: createWebLibraryScan
       summary: 创建一次后台原件库扫描
+      description: 扫描只登记和核对原件，不创建 Paper、入库任务、chunk 或向量。
       parameters:
         - $ref: '#/components/parameters/OptionalRequestId'
       responses:
@@ -111,7 +224,9 @@ paths:
       tags: [Papers]
       operationId: uploadWebPaper
       summary: 上传一篇文本型 PDF
+      deprecated: true
       description: >-
+        兼容性入口；新客户端应依次调用 library/files 上传原件和 ingestion 手动入库。
         multipart 请求必须且只能包含一个名为 file 的 PDF，最大 50 MB、500 页。
         Java 不保存文件，只把请求转发给 Agent。
       parameters:
@@ -399,6 +514,12 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/Identifier'
+    LibraryFileId:
+      name: libraryFileId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
     JobId:
       name: jobId
       in: path
@@ -434,6 +555,23 @@ components:
       required: false
       schema:
         $ref: '#/components/schemas/LibraryScanItemOutcome'
+    LibraryFilesOffset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    LibraryFilesLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 100
     OptionalRequestId:
       name: X-Request-Id
       in: header
@@ -497,13 +635,17 @@ components:
     PaperSourceStatus:
       type: string
       enum: [AVAILABLE, MISSING, REPLACED]
+    LibraryFileKnowledgeStatus:
+      type: string
+      description: 原件与默认知识库的对应状态；扫描和原件上传只能产生 NOT_INGESTED。
+      enum: [NOT_INGESTED, PROCESSING, READY, FAILED, EXCLUDED]
     LibraryScanStatus:
       type: string
       description: 单个文件失败时任务仍可 SUCCEEDED，并通过 failedCount 和扫描项报告部分失败。
       enum: [QUEUED, RUNNING, SUCCEEDED, FAILED]
     LibraryScanItemOutcome:
       type: string
-      description: 每个被发现路径的独立处理结果。
+      description: 每个被发现路径的独立处理结果；REGISTERED 只表示新增 LibraryFile，不表示入库。
       enum: [REGISTERED, UNCHANGED, MOVED, DUPLICATE, EXCLUDED, SKIPPED, FAILED]
     IngestionJobStatus:
       type: string
@@ -684,6 +826,109 @@ components:
         total:
           type: integer
           minimum: 0
+    LibraryFile:
+      type: object
+      additionalProperties: false
+      required:
+        - libraryFileId
+        - relativePath
+        - fileName
+        - fileSizeBytes
+        - sha256
+        - sourceStatus
+        - knowledgeStatus
+        - paperId
+        - paperTitle
+        - searchable
+        - currentIngestion
+        - discoveredAt
+        - lastSeenAt
+        - updatedAt
+      properties:
+        libraryFileId:
+          $ref: '#/components/schemas/Identifier'
+        relativePath:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: 相对 originals 目录的正斜杠路径；不得是绝对路径或包含路径穿越。
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 512
+        fileSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 52428800
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        sourceStatus:
+          $ref: '#/components/schemas/PaperSourceStatus'
+        knowledgeStatus:
+          $ref: '#/components/schemas/LibraryFileKnowledgeStatus'
+        paperId:
+          description: NOT_INGESTED 时必须为 null；其余知识库状态必须关联 Paper。
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+        paperTitle:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 1024
+        searchable:
+          type: boolean
+          description: 仅 knowledgeStatus=READY 且 sourceStatus=AVAILABLE 时为 true。
+        currentIngestion:
+          description: NOT_INGESTED 时必须为 null；关联 Paper 后返回其当前入库任务摘要。
+          oneOf:
+            - $ref: '#/components/schemas/IngestionSummary'
+            - type: 'null'
+        discoveredAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    LibraryFilesPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/LibraryFile'
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    LibraryFileUploadData:
+      type: object
+      additionalProperties: false
+      required: [libraryFile, duplicate]
+      properties:
+        libraryFile:
+          $ref: '#/components/schemas/LibraryFile'
+        duplicate:
+          type: boolean
+          description: true 表示相同 SHA-256 原件已经登记，未重复落盘。
+    LibraryFileIngestionData:
+      type: object
+      additionalProperties: false
+      required: [libraryFile, paper, ingestionJob, duplicate]
+      properties:
+        libraryFile:
+          $ref: '#/components/schemas/LibraryFile'
+        paper:
+          $ref: '#/components/schemas/Paper'
+        ingestionJob:
+          $ref: '#/components/schemas/IngestionJob'
+        duplicate:
+          type: boolean
+          description: true 表示相同 SHA-256 已有关联 Paper，未创建第二篇论文或向量。
     LibraryScanFailure:
       type: object
       additionalProperties: false
@@ -720,7 +965,10 @@ components:
         status:
           $ref: '#/components/schemas/LibraryScanStatus'
         discoveredCount: { type: integer, minimum: 0 }
-        registeredCount: { type: integer, minimum: 0 }
+        registeredCount:
+          type: integer
+          minimum: 0
+          description: 本次新增登记的原件数量；登记原件不会自动创建 Paper、入库任务或向量。
         unchangedCount: { type: integer, minimum: 0 }
         duplicateCount: { type: integer, minimum: 0 }
         excludedCount: { type: integer, minimum: 0 }
@@ -764,7 +1012,7 @@ components:
     LibraryScanItem:
       type: object
       additionalProperties: false
-      required: [relativePath, outcome, paperId, code, message]
+      required: [relativePath, outcome, libraryFileId, paperId, code, message]
       properties:
         relativePath:
           type: string
@@ -772,7 +1020,13 @@ components:
           maxLength: 2048
         outcome:
           $ref: '#/components/schemas/LibraryScanItemOutcome'
+        libraryFileId:
+          description: 成功对应到原件记录时返回；SKIPPED 或无法登记的 FAILED 项可以为 null。
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
         paperId:
+          description: 原件尚未手动录入知识库时为 null；扫描本身不得创建 Paper。
           oneOf:
             - $ref: '#/components/schemas/Identifier'
             - type: 'null'
@@ -851,6 +1105,33 @@ components:
           properties:
             data:
               $ref: '#/components/schemas/LibraryInfo'
+      unevaluatedProperties: false
+    LibraryFilesResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LibraryFilesPage'
+      unevaluatedProperties: false
+    LibraryFileUploadResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LibraryFileUploadData'
+      unevaluatedProperties: false
+    LibraryFileIngestionResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LibraryFileIngestionData'
       unevaluatedProperties: false
     LibraryScanResult:
       allOf:
@@ -945,6 +1226,77 @@ components:
               supportedExtensions: ['.pdf']
               scanInProgress: false
               latestScan: null
+    LibraryFilesResultResponse:
+      description: 分页原件与知识库对应状态 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryFilesResult'
+          example:
+            code: SUCCESS
+            message: Success.
+            requestId: req-library-files-001
+            data:
+              items:
+                - libraryFileId: library-file-demo-001
+                  relativePath: uploads/synthetic-demo.pdf
+                  fileName: synthetic-demo.pdf
+                  fileSizeBytes: 4096
+                  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                  sourceStatus: AVAILABLE
+                  knowledgeStatus: NOT_INGESTED
+                  paperId: null
+                  paperTitle: null
+                  searchable: false
+                  currentIngestion: null
+                  discoveredAt: '2026-08-29T00:00:00Z'
+                  lastSeenAt: '2026-08-29T00:00:00Z'
+                  updatedAt: '2026-08-29T00:00:00Z'
+              total: 1
+              offset: 0
+              limit: 100
+    LibraryFileUploadResultResponse:
+      description: PDF 原件已登记但未创建 Paper 或入库任务的 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryFileUploadResult'
+          example:
+            code: SUCCESS
+            message: Success.
+            requestId: req-library-upload-001
+            data:
+              libraryFile:
+                libraryFileId: library-file-demo-001
+                relativePath: uploads/synthetic-demo.pdf
+                fileName: synthetic-demo.pdf
+                fileSizeBytes: 4096
+                sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                sourceStatus: AVAILABLE
+                knowledgeStatus: NOT_INGESTED
+                paperId: null
+                paperTitle: null
+                searchable: false
+                currentIngestion: null
+                discoveredAt: '2026-08-29T00:00:00Z'
+                lastSeenAt: '2026-08-29T00:00:00Z'
+                updatedAt: '2026-08-29T00:00:00Z'
+              duplicate: false
+    LibraryFileIngestionResultResponse:
+      description: 原件已关联 Paper 和当前入库任务的 Result。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LibraryFileIngestionResult'
     LibraryScanAcceptedResponse:
       description: 原件库扫描任务已排队 Result。
       headers:
@@ -998,7 +1350,8 @@ components:
               items:
                 - relativePath: topic/synthetic-demo.pdf
                   outcome: REGISTERED
-                  paperId: paper-demo-001
+                  libraryFileId: library-file-demo-001
+                  paperId: null
                   code: null
                   message: null
               total: 1

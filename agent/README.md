@@ -3,9 +3,10 @@
 AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 DeepSeek Tool Calling
 实现。Python 是论文文件与 AI 领域数据的唯一事实来源。
 
-当前运行时使用仓库外的 `AIRESEARCHER_STORAGE_DIR`，支持单 PDF 上传/删除、MySQL 持久
-任务、PyMuPDF 按页切块、BGE-M3 embedding、Qdrant、本地 reranker、原生 Tool Calling、
-SSE 和引用校验。本地原件库扫描与排除/恢复仍处于契约已完成、实现待完成状态。
+当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理 PDF 原件，支持只登记上传、分页
+清单、后台扫描、逐篇手动入库、排除/恢复、MySQL 持久任务、PyMuPDF 按页切块、BGE-M3
+embedding、Qdrant、本地 reranker、原生 Tool Calling、SSE 和引用校验。旧
+`AIRESEARCHER_STORAGE_DIR` 仅保留迁移期兼容读取。
 
 ## 目录结构
 

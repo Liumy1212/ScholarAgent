@@ -37,7 +37,7 @@ class AgentPaperClientTest {
                     return response.status(200)
                             .header("Content-Type", "application/json")
                             .sendString(Mono.just("""
-                                    {"items":[{"paperId":"paper-001","title":"Grounded Paper","authors":["Ada Example"],"publicationYear":2026,"fileName":"paper.pdf","fileSizeBytes":1024,"status":"READY","pageCount":2,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:01:00Z","currentIngestion":{"jobId":"job-001","status":"SUCCEEDED","stage":"COMPLETED","attempt":1,"maxAttempts":3,"canRetry":false,"failure":null}}],"total":1}
+                                    {"items":[{"paperId":"paper-001","title":"Grounded Paper","authors":["Ada Example"],"publicationYear":2026,"fileName":"paper.pdf","fileSizeBytes":1024,"libraryRelativePath":"uploads/paper.pdf","sourceStatus":"AVAILABLE","status":"READY","searchable":true,"pageCount":2,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:01:00Z","currentIngestion":{"jobId":"job-001","status":"SUCCEEDED","stage":"COMPLETED","attempt":1,"maxAttempts":3,"canRetry":false,"failure":null}}],"total":1}
                                     """))
                             .then();
                 })

@@ -2,9 +2,9 @@
 
 AIResearcher 的 Agent API、浏览器 Web API 和 SSE 共享机器可读契约。
 
-契约采用 contract-first：它们可以先于 Python、Java 和 React 实现被接受。当前契约已经
-定义本地论文原件库扫描与排除/恢复，但三端消费者仍使用现有单 PDF 上传/删除流程。实现状态
-以 [路线图阶段 1.4](../docs/roadmap.md)为准，契约存在不等于功能已经上线。
+契约采用 contract-first：它们可以先于 Python、Java 和 React 实现被接受。当前本地论文
+原件清单、只登记上传、手动入库、扫描与排除/恢复已经由三端实现，并已通过合成 PDF
+全栈冒烟。完成状态与后续范围以[路线图阶段 1.4](../docs/roadmap.md)为准。
 
 ## 目录结构
 
@@ -27,7 +27,7 @@ npm ci
 npm run validate
 ```
 
-校验覆盖两份 OpenAPI、JSON Schema、有效/无效事件、完整成功/失败流、DTO 对应关系、
-分页与冲突语义，以及 `Result<T>`、PDF Range 和 SSE 边界。
+校验覆盖两份 OpenAPI、JSON Schema、有效/无效事件、完整成功/失败流、原件/手动入库 DTO
+对应关系、分页与冲突语义，以及 `Result<T>`、PDF Range 和 SSE 边界。
 
 修改前阅读 [Contract instructions](AGENTS.md)。

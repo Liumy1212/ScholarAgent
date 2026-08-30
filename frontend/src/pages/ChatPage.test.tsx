@@ -43,7 +43,11 @@ function wire(event: ReturnType<typeof envelope>): string {
   return `event: ${event.type}\nid: ${event.eventId}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-function paperListResponse(init?: RequestInit, ready = false): Response {
+function paperListResponse(
+  init?: RequestInit,
+  include = false,
+  searchable = include,
+): Response {
   const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
   const paper = {
     paperId: 'paper-component-001',
@@ -52,7 +56,10 @@ function paperListResponse(init?: RequestInit, ready = false): Response {
     publicationYear: 2026,
     fileName: 'synthetic.pdf',
     fileSizeBytes: 4096,
+    libraryRelativePath: 'uploads/synthetic.pdf',
+    sourceStatus: 'AVAILABLE',
     status: 'READY',
+    searchable,
     pageCount: 3,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:01:00Z',
@@ -71,7 +78,7 @@ function paperListResponse(init?: RequestInit, ready = false): Response {
       code: 'SUCCESS',
       message: 'Success.',
       requestId,
-      data: { items: ready ? [paper] : [], total: ready ? 1 : 0 },
+      data: { items: include ? [paper] : [], total: include ? 1 : 0 },
     }),
     {
       status: 200,
@@ -255,5 +262,23 @@ describe('ChatPage', () => {
     expect(await screen.findByText('本次生成已中断')).toBeTruthy();
     expect(screen.getByText('尚未完成的回答')).toBeTruthy();
     expect(screen.getByText('已中断')).toBeTruthy();
+  });
+
+  it('不允许选择 READY 但 searchable=false 的论文', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+        paperListResponse(init, true, false),
+      ),
+    );
+    render(<ChatPage />);
+
+    expect(
+      await screen.findByText(
+        '知识库中还没有可检索论文；此时只能得到模型知识回答。',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('检索全部可检索论文')).toBeTruthy();
+    expect(screen.queryByText('Synthetic Research Paper')).toBeNull();
   });
 });

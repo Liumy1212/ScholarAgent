@@ -1,30 +1,34 @@
 # AIResearcher
 
 AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库项目。当前已经完成可运行的
-单篇论文 RAG 闭环，并以此为基础逐步扩展论文管理、深度阅读、研究规划、实验和科研写作。
+单篇论文 RAG 闭环，并在三端实现本地论文原件库、扫描、手动入库和排除/恢复能力。阶段
+1.4 的模块检查与合成 PDF 全栈冒烟均已通过。
 
 ## 当前能力
 
 当前实现支持：
 
 - React 仅通过 Java BFF 访问 Python Agent。
-- 上传文本型 PDF，由 Python Worker 完成解析、按页切块和后台建库。
+- Python 在 `.private/paper-library/originals/` 管理 PDF 原件，并把登记与知识库入库分开。
+- Agent 与 Java 提供原件上传、分页清单、目录扫描、手动入库、排除/恢复和 PDF Range 接口。
+- React 展示统一原件清单、扫描结果、入库进度和可检索状态，并提供逐篇入库、重试、排除
+  与恢复操作；网页上传只保存原件。
+- Chat 只允许选择 `searchable=true` 的论文。
+- 兼容性上传仍可由 Python Worker 完成解析、按页切块和后台建库。
 - 使用 BGE-M3 embedding、Qdrant 检索和本地 Rerank。
 - 使用 DeepSeek 原生 Tool Calling 选择知识库检索或文档查询工具。
 - 通过 SSE 返回工具状态、流式回答和可跳转到 PDF 页码的引用。
 - 使用 MySQL 保存论文、任务、会话、Run 和引用等 Agent 数据。
 
 ```text
-上传 PDF → 后台解析与建库 → Web 预览
+上传或扫描 PDF 原件 → 手动确认入库 → 后台解析与建库 → Web 预览
 → 用户提问 → Tool Calling
 → 检索与 Rerank → SSE 流式回答
 → 展示论文证据与页码引用
 ```
 
-本地论文原件库、目录扫描、原件状态以及排除/恢复接口已经完成机器可读契约，但
-Agent、Backend、Frontend 和运行配置尚未实现这些新契约。当前运行时仍使用仓库外的
-`AIRESEARCHER_STORAGE_DIR` 和现有单文件上传/删除流程，具体进度见
-[长期路线图](docs/roadmap.md)。
+当前 React 页面已经切换到统一原件清单，不再提供本地原件硬删除。阶段完成状态见
+[长期路线图](docs/roadmap.md)；阶段 1.4 已完成，MCP 获取和 PDF 之外的解析器仍属于后续规划。
 
 ## 调用链
 
@@ -85,5 +89,6 @@ Copy-Item .\.env.example .\.env
 ## 数据安全
 
 `.env`、API Key、密码、真实 PDF、数据库、向量、模型、缓存和日志不得提交到 Git。
-当前 PDF storage 和模型缓存必须位于仓库外；MySQL 与 Qdrant 数据保存在 Docker named
-volume 中。仓库只接收代码、非敏感配置模板、迁移、合成测试数据和公开文档。
+论文原件位于被 Git 忽略的 `.private/paper-library/`，模型缓存必须位于仓库外；MySQL 与
+Qdrant 数据保存在 Docker named volume 中。仓库只接收代码、非敏感配置模板、迁移、合成
+测试数据和公开文档。

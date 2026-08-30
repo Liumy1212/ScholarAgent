@@ -10,6 +10,7 @@ from airesearcher_agent.retrieval.models import SearchHit
 def runtime_settings(runtime_root: Path, **overrides: Any) -> Settings:
     values: dict[str, Any] = {
         "AIRESEARCHER_STORAGE_DIR": runtime_root / "storage",
+        "AIRESEARCHER_PAPER_LIBRARY_DIR": runtime_root / "paper-library",
         "AIRESEARCHER_MODEL_CACHE_DIR": runtime_root / "models",
         "DEEPSEEK_API_KEY": "test-only-key",
         "DEEPSEEK_MODEL": "deepseek-v4-flash",

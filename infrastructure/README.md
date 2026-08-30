@@ -15,8 +15,8 @@ Compose 仅绑定本机地址：
 - MySQL volume：`airesearcher_mysql_data`
 - Qdrant volume：`airesearcher_qdrant_data`
 
-PDF storage 与模型缓存由 `.env` 指向仓库外目录。当前不使用 Redis，也不使用宿主机 MySQL
-服务作为项目数据库。
+PDF 原件库由 `.env` 指向仓库内被 Git 忽略的 `.private/` 子目录，模型缓存位于仓库外。
+当前不使用 Redis，也不使用宿主机 MySQL 服务作为项目数据库。
 
 ## 配置检查
 

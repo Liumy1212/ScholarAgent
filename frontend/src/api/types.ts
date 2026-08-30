@@ -94,7 +94,23 @@ export interface StreamOpenError {
   details?: StreamOpenErrorDetail[];
 }
 
-export type PaperStatus = 'PROCESSING' | 'READY' | 'FAILED';
+export type PaperStatus = 'PROCESSING' | 'READY' | 'FAILED' | 'EXCLUDED';
+export type PaperSourceStatus = 'AVAILABLE' | 'MISSING' | 'REPLACED';
+export type LibraryFileKnowledgeStatus =
+  | 'NOT_INGESTED'
+  | 'PROCESSING'
+  | 'READY'
+  | 'FAILED'
+  | 'EXCLUDED';
+export type LibraryScanStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+export type LibraryScanItemOutcome =
+  | 'REGISTERED'
+  | 'UNCHANGED'
+  | 'MOVED'
+  | 'DUPLICATE'
+  | 'EXCLUDED'
+  | 'SKIPPED'
+  | 'FAILED';
 export type IngestionJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 export type IngestionStage =
   | 'QUEUED'
@@ -128,11 +144,94 @@ export interface Paper {
   publicationYear: number | null;
   fileName: string;
   fileSizeBytes: number;
+  libraryRelativePath: string;
+  sourceStatus: PaperSourceStatus;
   status: PaperStatus;
+  searchable: boolean;
   pageCount: number | null;
   createdAt: string;
   updatedAt: string;
   currentIngestion: IngestionSummary;
+}
+
+export interface LibraryFile {
+  libraryFileId: string;
+  relativePath: string;
+  fileName: string;
+  fileSizeBytes: number;
+  sha256: string;
+  sourceStatus: PaperSourceStatus;
+  knowledgeStatus: LibraryFileKnowledgeStatus;
+  paperId: string | null;
+  paperTitle: string | null;
+  searchable: boolean;
+  currentIngestion: IngestionSummary | null;
+  discoveredAt: string;
+  lastSeenAt: string;
+  updatedAt: string;
+}
+
+export interface LibraryFilesPage {
+  items: LibraryFile[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface LibraryFileUploadData {
+  libraryFile: LibraryFile;
+  duplicate: boolean;
+}
+
+export interface LibraryFileIngestionData {
+  libraryFile: LibraryFile;
+  paper: Paper;
+  ingestionJob: IngestionJob;
+  duplicate: boolean;
+}
+
+export interface LibraryScanFailure {
+  code: string;
+  message: string;
+}
+
+export interface LibraryScan {
+  scanId: string;
+  status: LibraryScanStatus;
+  discoveredCount: number;
+  registeredCount: number;
+  unchangedCount: number;
+  duplicateCount: number;
+  excludedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  failure: LibraryScanFailure | null;
+}
+
+export interface LibraryInfo {
+  rootPath: string;
+  supportedExtensions: string[];
+  scanInProgress: boolean;
+  latestScan: LibraryScan | null;
+}
+
+export interface LibraryScanItem {
+  relativePath: string;
+  outcome: LibraryScanItemOutcome;
+  libraryFileId: string | null;
+  paperId: string | null;
+  code: string | null;
+  message: string | null;
+}
+
+export interface LibraryScanItemsPage {
+  items: LibraryScanItem[];
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 export interface IngestionJob extends IngestionSummary {

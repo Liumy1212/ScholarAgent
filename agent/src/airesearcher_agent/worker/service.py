@@ -7,7 +7,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from airesearcher_agent.application.errors import IngestionError
+from airesearcher_agent.application.errors import AgentError, IngestionError
+from airesearcher_agent.application.library_files import LibraryFileService
 from airesearcher_agent.config import Settings
 from airesearcher_agent.domain.papers import (
     IngestionJobStatus,
@@ -20,6 +21,7 @@ from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import (
     ChunkRecord,
     IngestionJobRecord,
+    LibraryFileRecord,
     PaperRecord,
     utc_now,
 )
@@ -40,6 +42,14 @@ class ClaimedJob:
     worker_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class IngestionSource:
+    path: Path
+    library_file_id: str | None
+    sha256: str
+    file_size_bytes: int
+
+
 class IngestionWorker:
     def __init__(
         self,
@@ -55,6 +65,7 @@ class IngestionWorker:
         self._parser = parser
         self._embedding = embedding
         self._vector_store = vector_store
+        self._library_files = LibraryFileService(database=database, settings=settings)
         self._lease_seconds = settings.worker_lease_seconds
         self._worker_id = worker_id[:128]
 
@@ -81,6 +92,7 @@ class IngestionWorker:
             for job in jobs:
                 if job.attempt >= job.max_attempts:
                     job.status = IngestionJobStatus.FAILED.value
+                    job.active_key = None
                     job.stage = IngestionStage.FAILED.value
                     job.failure_code = "WORKER_LEASE_EXPIRED"
                     job.failure_message = "入库 Worker 中断次数已达到上限。"
@@ -92,6 +104,7 @@ class IngestionWorker:
                         paper.updated_at = now
                 else:
                     job.status = IngestionJobStatus.QUEUED.value
+                    job.active_key = job.paper_id
                     job.stage = IngestionStage.QUEUED.value
                     job.available_at = now
                     job.failure_code = None
@@ -125,6 +138,7 @@ class IngestionWorker:
             if paper is None:
                 raise RuntimeError("queued ingestion job references a missing paper")
             job.status = IngestionJobStatus.RUNNING.value
+            job.active_key = job.paper_id
             job.stage = IngestionStage.PARSING.value
             job.attempt += 1
             job.lease_owner = self._worker_id
@@ -138,8 +152,9 @@ class IngestionWorker:
 
     def _process(self, claimed: ClaimedJob) -> None:
         try:
-            paper_path = self._paper_path(claimed)
-            parsed = self._parser.parse(paper_id=claimed.paper_id, path=paper_path)
+            source = self._paper_source(claimed)
+            parsed = self._parser.parse(paper_id=claimed.paper_id, path=source.path)
+            self._verify_source(source)
             self._set_stage(claimed, IngestionStage.CHUNKING)
             self._store_chunks(claimed, parsed)
             self._set_stage(claimed, IngestionStage.EMBEDDING)
@@ -147,6 +162,7 @@ class IngestionWorker:
             if len(vectors) != len(parsed.chunks):
                 raise RuntimeError("embedding provider returned an unexpected vector count")
             self._set_stage(claimed, IngestionStage.INDEXING)
+            self._verify_source(source)
             self._vector_store.delete_paper(claimed.paper_id)
             self._vector_store.upsert_chunks(
                 paper_id=claimed.paper_id,
@@ -157,6 +173,7 @@ class IngestionWorker:
                 ],
                 vectors=vectors,
             )
+            self._verify_source(source)
             self._complete(claimed)
         except LeaseLostError:
             logger.warning("Worker lease was lost for ingestion job %s", claimed.job_id)
@@ -187,19 +204,85 @@ class IngestionWorker:
                 retryable=True,
             )
 
-    def _paper_path(self, claimed: ClaimedJob) -> Path:
+    def _paper_source(self, claimed: ClaimedJob) -> IngestionSource:
         with self._database.session() as session:
             paper = session.get(PaperRecord, claimed.paper_id)
             if paper is None:
                 raise RuntimeError("claimed job references a missing paper")
-            path = Path(paper.storage_path)
-        if not path.is_file():
+            linked_sources = session.scalars(
+                select(LibraryFileRecord)
+                .where(LibraryFileRecord.paper_id == paper.id)
+                .order_by(LibraryFileRecord.last_seen_at.desc(), LibraryFileRecord.id)
+            ).all()
+            available = next(
+                (source for source in linked_sources if source.source_status == "AVAILABLE"),
+                None,
+            )
+            legacy_path = Path(paper.storage_path)
+            legacy_sha256 = paper.sha256
+            legacy_size = paper.file_size_bytes
+        if available is not None:
+            try:
+                stored = self._library_files.get_file(available.id)
+            except AgentError as error:
+                raise self._source_error(error) from error
+            return IngestionSource(
+                path=Path(stored.path),
+                library_file_id=stored.library_file_id,
+                sha256=stored.sha256,
+                file_size_bytes=stored.file_size_bytes,
+            )
+        if linked_sources:
+            raise IngestionError(
+                code="LIBRARY_FILE_UNAVAILABLE",
+                message="论文没有可用原件，请重新扫描原件库。",
+                retryable=False,
+            )
+        if not legacy_path.is_file():
             raise IngestionError(
                 code="PAPER_FILE_MISSING",
                 message="论文文件不存在，无法入库。",
                 retryable=False,
             )
-        return path
+        return IngestionSource(
+            path=legacy_path,
+            library_file_id=None,
+            sha256=legacy_sha256,
+            file_size_bytes=legacy_size,
+        )
+
+    def _verify_source(self, source: IngestionSource) -> None:
+        if source.library_file_id is None:
+            if not source.path.is_file() or source.path.stat().st_size != source.file_size_bytes:
+                raise IngestionError(
+                    code="PAPER_FILE_MISSING",
+                    message="论文文件在入库期间变得不可用。",
+                    retryable=False,
+                )
+            return
+        try:
+            current = self._library_files.get_file(source.library_file_id)
+        except AgentError as error:
+            raise self._source_error(error) from error
+        if (
+            Path(current.path) != source.path
+            or current.sha256 != source.sha256
+            or current.file_size_bytes != source.file_size_bytes
+        ):
+            raise IngestionError(
+                code="LIBRARY_FILE_CHANGED",
+                message="原件在入库期间发生变化，请重新扫描后重试。",
+                retryable=False,
+            )
+
+    @staticmethod
+    def _source_error(error: AgentError) -> IngestionError:
+        code = (
+            error.code
+            if error.code in {"LIBRARY_FILE_CHANGED", "LIBRARY_FILE_UNAVAILABLE"}
+            else "LIBRARY_FILE_UNAVAILABLE"
+        )
+        return IngestionError(code=code, message=error.message, retryable=False)
 
     def _paper_title(self, paper_id: str) -> str:
         with self._database.session() as session:
@@ -247,6 +330,7 @@ class IngestionWorker:
         with self._database.transaction() as session:
             job, paper = self._locked_records(session, claimed)
             job.status = IngestionJobStatus.SUCCEEDED.value
+            job.active_key = None
             job.stage = IngestionStage.COMPLETED.value
             job.lease_owner = None
             job.lease_expires_at = None
@@ -271,6 +355,7 @@ class IngestionWorker:
                 if paper is None:
                     return
                 job.status = IngestionJobStatus.FAILED.value
+                job.active_key = None
                 job.stage = IngestionStage.FAILED.value
                 job.failure_code = code[:128]
                 job.failure_message = message[:2048]
