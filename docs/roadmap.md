@@ -70,6 +70,23 @@ AIResearcher 的长期目标是形成从论文获取、理解和证据组织，�
 - Web 上传和目录扫描进入同一原件登记路径，并且都只在用户显式操作后进入同一手动入库路径。
 - 启动模板、脚本、架构和部署文档全部使用新配置，模块检查与全栈冒烟均已通过。
 
+#### 论文原件库日常操作修复 — 契约已完成、消费者待实现
+
+已接受的 Agent API 与 Web API 契约新增：
+
+- `GET /library/files` 的可选 `libraryState`，固定为 `ORIGINAL_MISSING`、
+  `NOT_INGESTED`、`INGESTED`，服务端必须用同一筛选谓词计算分页项目与 `total`。
+- `LibraryInfo.originalsPath`，明确返回扫描器实际递归遍历的 `originals/` 目录。
+- 正式的 `DELETE /papers/{paperId}` 知识删除：删除 Paper、任务、chunk 和向量，保留所有
+  仍存在的 PDF 原件；同时冻结 `PAPER_BUSY`、依赖失败和 Java 下游错误映射。
+- 上传允许 `application/pdf`、`application/octet-stream` 或未提供 MIME，但仍强制
+  `.pdf` 文件名、50 MB 上限和 `%PDF-` 签名校验。
+- exclusion/restore 继续保留为兼容接口，扫描仍然只登记和同步，不自动入库。
+
+当前只完成契约、示例、筛选夹具和语义校验；Python Agent、Java BFF、React 页面均尚未
+消费新增能力。后续按 Agent 数据生命周期、Java 代理、React 交互、全栈联调与文档验收的
+顺序实施，其中三端消费者可在契约基础上独立开发。
+
 ### 1.5 日常使用加固 — 规划中
 
 目标是让当前闭环可以长期、重复地在本机运行，而不只覆盖成功路径。

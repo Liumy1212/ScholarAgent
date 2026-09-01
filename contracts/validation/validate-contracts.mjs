@@ -10,6 +10,7 @@ import addFormats from "ajv-formats";
 const validationDirectory = path.dirname(fileURLToPath(import.meta.url));
 const contractsDirectory = path.resolve(validationDirectory, "..");
 const sseDirectory = path.join(contractsDirectory, "sse", "v1");
+const libraryStateFixtureDirectory = path.join(validationDirectory, "fixtures", "library-state");
 const terminalTypes = new Set(["run.completed", "run.failed"]);
 const stableStreamFields = [
   "requestId",
@@ -27,7 +28,7 @@ const routeDefinitions = [
   { suffix: "/library/scans/{scanId}", methods: ["get"], kind: "json" },
   { suffix: "/library/scans/{scanId}/items", methods: ["get"], kind: "json" },
   { suffix: "/papers", methods: ["get", "post"], kind: "json" },
-  { suffix: "/papers/{paperId}", methods: ["get"], kind: "json" },
+  { suffix: "/papers/{paperId}", methods: ["get", "delete"], kind: "json" },
   { suffix: "/papers/{paperId}/exclusion", methods: ["post", "delete"], kind: "json" },
   { suffix: "/papers/{paperId}/file", methods: ["get"], kind: "pdf" },
   { suffix: "/ingestion-jobs/{jobId}", methods: ["get"], kind: "json" },
@@ -63,10 +64,38 @@ async function findFiles(directory, predicate) {
   return files;
 }
 
+async function validateLibraryStateFixtures(schema) {
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  const validate = ajv.compile(schema);
+  const validValues = await readJson(path.join(libraryStateFixtureDirectory, "valid.json"));
+  const invalidValues = await readJson(path.join(libraryStateFixtureDirectory, "invalid.json"));
+
+  assert.deepEqual(
+    validValues,
+    ["ORIGINAL_MISSING", "NOT_INGESTED", "INGESTED"],
+    "libraryState 合法夹具必须覆盖全部枚举值",
+  );
+  for (const value of validValues) {
+    assert.equal(validate(value), true, `libraryState 合法夹具 ${String(value)} 被拒绝`);
+  }
+  assert.ok(invalidValues.length >= 5, "libraryState 非法夹具必须覆盖空值、别名、大小写和非字符串");
+  for (const value of invalidValues) {
+    assert.equal(validate(value), false, `libraryState 非法夹具 ${String(value)} 被错误接受`);
+  }
+}
+
 function formatAjvErrors(errors) {
   return (errors ?? [])
     .map((error) => `${error.instancePath || "/"} ${error.message}`)
     .join("; ");
+}
+
+function jsonResponseExampleCodes(response) {
+  const mediaType = response.content?.["application/json"];
+  if (mediaType?.example) {
+    return [mediaType.example.code];
+  }
+  return Object.values(mediaType?.examples ?? {}).map((example) => example.value.code);
 }
 
 async function validateJsonSchemasAndExamples() {
@@ -586,6 +615,16 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     assert.deepEqual(uploadSchema.required, ["file"], `${sourceName}: ${uploadPath} 必须且只能要求 file`);
     assert.deepEqual(Object.keys(uploadSchema.properties), ["file"], `${sourceName}: ${uploadPath} 只能定义 file`);
     assert.equal(uploadSchema.properties.file.format, "binary", `${sourceName}: ${uploadPath} file 必须是 binary`);
+    const uploadDeclaration = `${upload.description ?? ""} ${uploadSchema.properties.file.description ?? ""}`;
+    assert.match(uploadDeclaration, /\.pdf/u, `${sourceName}: ${uploadPath} 必须声明 .pdf 文件名约束`);
+    assert.match(uploadDeclaration, /application\/pdf/u, `${sourceName}: ${uploadPath} 必须接受 application/pdf`);
+    assert.match(
+      uploadDeclaration,
+      /application\/octet-stream/u,
+      `${sourceName}: ${uploadPath} 必须接受 application/octet-stream`,
+    );
+    assert.match(uploadDeclaration, /不提供 MIME|未提供 MIME/u, `${sourceName}: ${uploadPath} 必须接受空 MIME`);
+    assert.match(uploadDeclaration, /%PDF-/u, `${sourceName}: ${uploadPath} 必须声明 PDF 签名校验`);
   }
 
   assert.equal(
@@ -635,9 +674,100 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     .sort();
   assert.deepEqual(
     libraryFileQueryNames,
-    ["limit", "offset"],
-    `${sourceName}: 原件清单分页参数不完整`,
+    ["libraryState", "limit", "offset"],
+    `${sourceName}: 原件清单筛选和分页参数不完整`,
   );
+  assert.deepEqual(
+    dereferenced.components.schemas.LibraryStateFilter.enum,
+    ["ORIGINAL_MISSING", "NOT_INGESTED", "INGESTED"],
+    `${sourceName}: LibraryStateFilter 枚举不正确`,
+  );
+  const libraryStateParameter = listLibraryFiles.parameters.find(
+    (parameter) => parameter.in === "query" && parameter.name === "libraryState",
+  );
+  assert.ok(libraryStateParameter, `${sourceName}: 原件清单必须定义 libraryState`);
+  assert.equal(libraryStateParameter.required, false, `${sourceName}: libraryState 必须可选`);
+  assert.deepEqual(
+    Object.values(libraryStateParameter.examples).map((example) => example.value),
+    ["ORIGINAL_MISSING", "NOT_INGESTED", "INGESTED"],
+    `${sourceName}: libraryState 示例必须覆盖全部枚举值`,
+  );
+  for (const semanticToken of [
+    "MISSING",
+    "REPLACED",
+    "AVAILABLE",
+    "PROCESSING",
+    "FAILED",
+    "EXCLUDED",
+    "READY",
+    "searchable=true",
+    "total",
+  ]) {
+    assert.match(
+      listLibraryFiles.description,
+      new RegExp(semanticToken, "u"),
+      `${sourceName}: libraryState 描述缺少 ${semanticToken} 语义`,
+    );
+  }
+
+  const libraryInfoSchema = dereferenced.components.schemas.LibraryInfo;
+  assert.ok(libraryInfoSchema.required.includes("originalsPath"), `${sourceName}: LibraryInfo 必须要求 originalsPath`);
+  assert.match(
+    libraryInfoSchema.properties.originalsPath.description,
+    /实际.*遍历|扫描器.*遍历/u,
+    `${sourceName}: originalsPath 必须表示扫描器实际遍历目录`,
+  );
+
+  const deletePaper = dereferenced.paths[`${prefix}/papers/{paperId}`].delete;
+  assert.deepEqual(
+    Object.keys(deletePaper.responses).sort(),
+    side === "agent" ? ["200", "404", "409", "500", "503"] : ["200", "404", "409", "500", "502", "504"],
+    `${sourceName}: 删除知识响应状态不完整`,
+  );
+  for (const semanticToken of ["PAPER_NOT_FOUND", "PAPER_BUSY", "QDRANT_UNAVAILABLE", "DATABASE_UNAVAILABLE"]) {
+    assert.match(
+      deletePaper.description,
+      new RegExp(semanticToken, "u"),
+      `${sourceName}: 删除知识描述缺少 ${semanticToken} 语义`,
+    );
+  }
+  assert.match(deletePaper.description, /不删除|不得删除|绝不删除/u, `${sourceName}: 删除知识必须明确不删除 PDF`);
+  if (side === "web") {
+    for (const mappingToken of ["502 AGENT_UNAVAILABLE", "502 AGENT_ERROR", "504 AGENT_TIMEOUT", "500 INTERNAL_ERROR"]) {
+      assert.match(
+        deletePaper.description,
+        new RegExp(mappingToken, "u"),
+        `${sourceName}: 删除知识缺少 ${mappingToken} 下游映射`,
+      );
+    }
+  } else {
+    assert.match(deletePaper.description, /retryable=true/u, `${sourceName}: 可重试删除错误语义未冻结`);
+  }
+  const expectedDeleteErrorCodes = side === "agent"
+    ? {
+        404: ["PAPER_NOT_FOUND"],
+        409: ["PAPER_BUSY"],
+        503: ["DATABASE_UNAVAILABLE", "QDRANT_UNAVAILABLE"],
+      }
+    : {
+        404: ["PAPER_NOT_FOUND"],
+        409: ["PAPER_BUSY"],
+        500: ["INTERNAL_ERROR"],
+        502: ["AGENT_ERROR", "AGENT_UNAVAILABLE"],
+        504: ["AGENT_TIMEOUT"],
+      };
+  for (const [status, expectedCodes] of Object.entries(expectedDeleteErrorCodes)) {
+    assert.deepEqual(
+      jsonResponseExampleCodes(deletePaper.responses[status]).sort(),
+      expectedCodes,
+      `${sourceName}: 删除知识 ${status} 示例错误码不正确`,
+    );
+  }
+  const deleteDataSchema = dereferenced.components.schemas[
+    side === "agent" ? "DeletePaperResponse" : "DeletePaperData"
+  ];
+  assert.deepEqual(deleteDataSchema.required, ["paperId", "deleted"], `${sourceName}: 删除知识 DTO 字段不正确`);
+  assert.equal(deleteDataSchema.properties.deleted.const, true, `${sourceName}: deleted 必须固定为 true`);
 
   const uploadLibraryFile = dereferenced.paths[`${prefix}/library/files`].post;
   assert.match(
@@ -686,12 +816,14 @@ async function validateOpenApis() {
   const webSpec = path.join(contractsDirectory, "web-api", "web-openapi-v1.yaml");
   const agent = await loadAndValidateOpenApi(agentSpec, "/agent-api/v1", "agent", true);
   const web = await loadAndValidateOpenApi(webSpec, "/api/v1", "web", false);
+  await validateLibraryStateFixtures(agent.parsed.components.schemas.LibraryStateFilter);
 
   const commonSchemas = [
     "Identifier",
     "PaperStatus",
     "PaperSourceStatus",
     "LibraryFileKnowledgeStatus",
+    "LibraryStateFilter",
     "LibraryScanStatus",
     "LibraryScanItemOutcome",
     "IngestionJobStatus",
@@ -727,6 +859,11 @@ async function validateOpenApis() {
     "论文列表 data DTO 必须跨 BFF 保持一致",
   );
   assert.deepEqual(
+    agent.parsed.components.schemas.DeletePaperResponse,
+    web.parsed.components.schemas.DeletePaperData,
+    "删除知识 data DTO 必须跨 BFF 保持一致",
+  );
+  assert.deepEqual(
     agent.parsed.components.schemas.LibraryFileUploadResponse,
     web.parsed.components.schemas.LibraryFileUploadData,
     "原件上传 data DTO 必须跨 BFF 保持一致",
@@ -743,11 +880,11 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents with 16 REST operations plus shared SSE");
+  console.log("- 2 OpenAPI documents with 17 REST operations plus shared SSE");
   console.log("- 2 JSON Schemas");
   console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");
-  console.log("- library file/manual ingestion/scan/exclusion semantics, DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
+  console.log("- library filtering/upload/scan/knowledge deletion/exclusion semantics, valid/invalid filter fixtures, DTO parity, Result/PDF/SSE boundaries, Range headers, and inline examples");
 }
 
 main().catch((error) => {

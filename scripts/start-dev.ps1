@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$CheckOnly,
     [string]$EnvFile
@@ -56,7 +56,7 @@ function Read-EnvironmentFile {
     }
 
     $values = @{}
-    foreach ($rawLine in Get-Content -LiteralPath $Path) {
+    foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding UTF8) {
         $line = $rawLine.Trim()
         if (-not $line -or $line.StartsWith('#')) {
             continue
@@ -203,7 +203,13 @@ foreach ($entry in $EnvironmentValues.GetEnumerator()) {
 }
 
 Write-Step '检查本机工具与项目依赖'
-$Pwsh = Get-RequiredCommand -Name 'pwsh' -InstallHint '请安装 PowerShell 7。'
+$PwshCommand = Get-Command 'pwsh' -ErrorAction SilentlyContinue
+if ($PwshCommand) {
+    $PowerShellExecutable = $PwshCommand.Source
+} else {
+    $PowerShellExecutable = (Get-Process -Id $PID).Path
+    Write-Host "未找到 pwsh，将使用当前 PowerShell：$PowerShellExecutable" -ForegroundColor Yellow
+}
 $Docker = Get-RequiredCommand -Name 'docker' -InstallHint '请安装并启动 Docker Desktop。'
 $Conda = Get-RequiredCommand -Name 'conda' -InstallHint '请安装 Miniconda 或 Anaconda。'
 $Java = Get-RequiredCommand -Name 'java' -InstallHint '请安装 JDK 21。'
@@ -216,7 +222,13 @@ if (-not (Test-Path -LiteralPath $MavenWrapper -PathType Leaf)) {
 }
 Assert-GitIgnored -GitPath $Git -Path $PaperLibraryDirectory
 
-$javaVersion = (& $Java -version 2>&1 | Out-String)
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $javaVersion = (& $Java -version 2>&1 | Out-String)
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
 if ($javaVersion -notmatch 'version "21[\.]') {
     Fail '需要 JDK 21。请确认 java -version 与 JAVA_HOME 指向 JDK 21。'
 }
@@ -341,10 +353,10 @@ try {
 }
 
 Write-Step '在独立终端中启动四个应用'
-Start-DevelopmentTerminal -PowerShellPath $Pwsh -Title 'AIResearcher - Agent API' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000'
-Start-DevelopmentTerminal -PowerShellPath $Pwsh -Title 'AIResearcher - Worker' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m airesearcher_agent.worker.main'
-Start-DevelopmentTerminal -PowerShellPath $Pwsh -Title 'AIResearcher - Java BFF' -WorkingDirectory (Join-Path $RepositoryRoot 'backend') -Command '.\mvnw.cmd spring-boot:run'
-Start-DevelopmentTerminal -PowerShellPath $Pwsh -Title 'AIResearcher - React' -WorkingDirectory (Join-Path $RepositoryRoot 'frontend') -Command 'pnpm dev'
+Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Agent API' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000'
+Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Worker' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m airesearcher_agent.worker.main'
+Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Java BFF' -WorkingDirectory (Join-Path $RepositoryRoot 'backend') -Command '.\mvnw.cmd spring-boot:run'
+Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - React' -WorkingDirectory (Join-Path $RepositoryRoot 'frontend') -Command 'pnpm dev'
 
 Write-Host @"
 

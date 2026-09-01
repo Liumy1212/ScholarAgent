@@ -37,10 +37,16 @@ paths:
       tags: [Library]
       operationId: listAgentLibraryFiles
       summary: 分页列出论文原件及其知识库对应状态
-      description: 原件清单独立于知识库论文；NOT_INGESTED 原件尚未创建 Paper 或入库任务。
+      description: >-
+        原件清单独立于知识库论文。不传 libraryState 时返回全部；ORIGINAL_MISSING 仅返回
+        已关联 Paper 且 sourceStatus 为 MISSING 或 REPLACED 的记录；NOT_INGESTED 仅返回
+        sourceStatus=AVAILABLE 但当前不可检索的记录，包括未创建 Paper、入库中（PROCESSING）、
+        失败（FAILED）和兼容性 EXCLUDED；INGESTED 仅返回 sourceStatus=AVAILABLE、Paper 为 READY 且 searchable=true
+        的记录。筛选必须同时作用于 items 和 total，再执行分页。
       parameters:
         - $ref: '#/components/parameters/LibraryFilesOffset'
         - $ref: '#/components/parameters/LibraryFilesLimit'
+        - $ref: '#/components/parameters/LibraryStateFilter'
         - $ref: '#/components/parameters/RequiredRequestId'
       responses:
         '200':
@@ -56,8 +62,10 @@ paths:
       operationId: uploadAgentLibraryFile
       summary: 上传一篇 PDF 原件但不创建入库任务
       description: >-
-        multipart 请求必须且只能包含一个名为 file 的 PDF，最大 50 MB。文件完成安全校验、
-        SHA-256 去重和原子落盘后仅登记为原件；客户端必须另行调用 ingestion 接口才会解析和建库。
+        multipart 请求必须且只能包含一个名为 file 的 PDF，文件名必须以 .pdf 结尾，最大
+        50 MB。file part 的 MIME 可以是 application/pdf、application/octet-stream 或不提供；
+        Agent 最终仍按大小和 %PDF- 签名校验。文件完成安全校验、SHA-256 去重和原子落盘后
+        仅登记为原件；客户端必须另行调用 ingestion 接口才会解析和建库。
       parameters:
         - $ref: '#/components/parameters/RequiredRequestId'
       requestBody:
@@ -72,7 +80,9 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 单个 application/pdf 原件。
+                  description: >-
+                    单个 .pdf 原件；允许 application/pdf、application/octet-stream 或未提供 MIME，
+                    最终仍校验 50 MB 上限和 %PDF- 签名。
       responses:
         '200':
           $ref: '#/components/responses/LibraryFileUploadResponse'
@@ -232,7 +242,9 @@ paths:
       deprecated: true
       description: >-
         兼容性入口；新客户端应依次调用 library/files 上传原件和 ingestion 手动入库。
-        multipart 请求必须且只能包含一个名为 file 的 PDF，最大 50 MB、500 页。
+        multipart 请求必须且只能包含一个名为 file 的 PDF，文件名必须以 .pdf 结尾，最大
+        50 MB、500 页；file part 的 MIME 可以是 application/pdf、application/octet-stream
+        或不提供，最终仍按大小和 %PDF- 签名校验。
         相同 SHA-256 返回原论文和任务并将 duplicate 置为 true，不创建第二份文件或向量。
       parameters:
         - $ref: '#/components/parameters/RequiredRequestId'
@@ -248,7 +260,9 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 单个 application/pdf 文件。
+                  description: >-
+                    单个 .pdf 文件；允许 application/pdf、application/octet-stream 或未提供 MIME，
+                    最终仍校验大小和 %PDF- 签名。
       responses:
         '200':
           description: 已接收新论文，或返回 SHA-256 相同的既有论文。
@@ -342,6 +356,31 @@ paths:
           $ref: '#/components/responses/AgentErrorResponse'
         '500':
           $ref: '#/components/responses/AgentErrorResponse'
+    delete:
+      tags: [Papers]
+      operationId: deleteAgentPaperKnowledge
+      summary: 删除论文知识但保留仍存在的 PDF 原件
+      description: >-
+        先阻止论文继续检索，再删除该 Paper 的 Qdrant 向量，最后删除 Paper、入库任务和 chunk。
+        不得删除、移动或清理任何仍存在的 PDF 原件；AVAILABLE 原件解除 Paper 关联后成为未入库，
+        MISSING 或 REPLACED 且不再关联知识的陈旧登记可以清理。论文不存在返回 404
+        PAPER_NOT_FOUND；存在 QUEUED 或 RUNNING 入库任务返回 409 PAPER_BUSY 且 retryable=true；
+        Qdrant 或数据库不可用分别返回 503 QDRANT_UNAVAILABLE 或 DATABASE_UNAVAILABLE，
+        retryable=true，原件不受影响；其他内部失败返回 500。
+      parameters:
+        - $ref: '#/components/parameters/PaperId'
+        - $ref: '#/components/parameters/RequiredRequestId'
+      responses:
+        '200':
+          $ref: '#/components/responses/DeletePaperKnowledgeResponse'
+        '404':
+          $ref: '#/components/responses/DeletePaperNotFoundErrorResponse'
+        '409':
+          $ref: '#/components/responses/DeletePaperBusyErrorResponse'
+        '500':
+          $ref: '#/components/responses/AgentErrorResponse'
+        '503':
+          $ref: '#/components/responses/DeletePaperDependencyErrorResponse'
   /agent-api/v1/papers/{paperId}/exclusion:
     post:
       tags: [Papers]
@@ -547,6 +586,20 @@ components:
         minimum: 1
         maximum: 200
         default: 100
+    LibraryStateFilter:
+      name: libraryState
+      in: query
+      required: false
+      description: 不传表示全部；枚举语义由 LibraryStateFilter Schema 固定。
+      schema:
+        $ref: '#/components/schemas/LibraryStateFilter'
+      examples:
+        originalMissing:
+          value: ORIGINAL_MISSING
+        notIngested:
+          value: NOT_INGESTED
+        ingested:
+          value: INGESTED
     RequiredRequestId:
       name: X-Request-Id
       in: header
@@ -614,6 +667,13 @@ components:
       type: string
       description: 原件与默认知识库的对应状态；扫描和原件上传只能产生 NOT_INGESTED。
       enum: [NOT_INGESTED, PROCESSING, READY, FAILED, EXCLUDED]
+    LibraryStateFilter:
+      type: string
+      description: >-
+        原件库服务端筛选：ORIGINAL_MISSING 表示已关联 Paper 且原件为 MISSING 或 REPLACED；
+        NOT_INGESTED 表示原件 AVAILABLE 但当前不可检索，包含无 Paper、入库中、失败和
+        兼容性 EXCLUDED；INGESTED 表示原件 AVAILABLE、Paper 为 READY 且 searchable=true。
+      enum: [ORIGINAL_MISSING, NOT_INGESTED, INGESTED]
     LibraryScanStatus:
       type: string
       description: 单个文件失败时任务仍可 SUCCEEDED，并通过 failedCount 和扫描项报告部分失败。
@@ -801,6 +861,17 @@ components:
         total:
           type: integer
           minimum: 0
+    DeletePaperResponse:
+      type: object
+      additionalProperties: false
+      required: [paperId, deleted]
+      properties:
+        paperId:
+          $ref: '#/components/schemas/Identifier'
+        deleted:
+          type: boolean
+          const: true
+          description: true 表示论文知识、任务、chunk 和向量已删除；不表示 PDF 原件被删除。
     LibraryFile:
       type: object
       additionalProperties: false
@@ -965,12 +1036,16 @@ components:
     LibraryInfo:
       type: object
       additionalProperties: false
-      required: [rootPath, supportedExtensions, scanInProgress, latestScan]
+      required: [rootPath, originalsPath, supportedExtensions, scanInProgress, latestScan]
       properties:
         rootPath:
           type: string
           minLength: 1
-          description: Agent 解析后的本机原件库绝对路径，仅用于本地用户管理文件。
+          description: Agent 解析后的本机原件库根目录绝对路径。
+        originalsPath:
+          type: string
+          minLength: 1
+          description: 扫描器实际递归遍历、供本机用户直接存放 PDF 的 originals 目录绝对路径。
         supportedExtensions:
           type: array
           minItems: 1
@@ -1091,6 +1166,7 @@ components:
             $ref: '#/components/schemas/LibraryInfo'
           example:
             rootPath: 'D:/AIResearcher/.private/paper-library'
+            originalsPath: 'D:/AIResearcher/.private/paper-library/originals'
             supportedExtensions: ['.pdf']
             scanInProgress: false
             latestScan: null
@@ -1195,6 +1271,18 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Paper'
+    DeletePaperKnowledgeResponse:
+      description: 论文知识已删除；所有仍存在的 PDF 原件均保留。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DeletePaperResponse'
+          example:
+            paperId: paper-demo-001
+            deleted: true
     IngestionJobResponse:
       description: 入库任务详情。
       headers:
@@ -1219,6 +1307,60 @@ components:
             message: 未找到指定论文。
             requestId: req-demo-error-001
             retryable: false
+    DeletePaperNotFoundErrorResponse:
+      description: 论文不存在；code 固定为 PAPER_NOT_FOUND。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AgentApiError'
+          example:
+            schemaVersion: '1.0'
+            code: PAPER_NOT_FOUND
+            message: 未找到指定论文。
+            requestId: req-delete-paper-001
+            retryable: false
+    DeletePaperBusyErrorResponse:
+      description: 论文存在 QUEUED 或 RUNNING 入库任务；code 固定为 PAPER_BUSY。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AgentApiError'
+          example:
+            schemaVersion: '1.0'
+            code: PAPER_BUSY
+            message: 论文正在入库，请稍后再操作。
+            requestId: req-delete-paper-001
+            retryable: true
+    DeletePaperDependencyErrorResponse:
+      description: Qdrant 或数据库不可用；论文保持不可检索，原件不受影响，可以重试删除。
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AgentApiError'
+          examples:
+            qdrantUnavailable:
+              value:
+                schemaVersion: '1.0'
+                code: QDRANT_UNAVAILABLE
+                message: 向量服务暂时不可用；论文已停止检索，但清理尚未完成。
+                requestId: req-delete-paper-001
+                retryable: true
+            databaseUnavailable:
+              value:
+                schemaVersion: '1.0'
+                code: DATABASE_UNAVAILABLE
+                message: 论文数据库暂时不可用。
+                requestId: req-delete-paper-001
+                retryable: true
     PdfFile:
       description: 完整 PDF；不使用 JSON 包装。
       headers:
