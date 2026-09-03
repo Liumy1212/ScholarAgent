@@ -1,8 +1,8 @@
 # Web API contract
 
 `web-openapi-v1.yaml` 是 Java BFF 由 React 消费的已接受目标契约。阶段 1.4 的本地原件库
-基线已由 Java 和 React 接入并通过合成 PDF 全栈冒烟；新增 `libraryState`、
-`originalsPath`、知识删除和上传 MIME 语义已经接受，但消费者仍待后续阶段实现。
+基线已由 Java 和 React 接入并通过合成 PDF 全栈冒烟；`libraryState`、`originalsPath`、
+知识删除和上传 MIME 语义已经由 Java 与 React 消费，并通过模块测试及本轮全栈验收。
 
 ```text
 GET    /api/v1/library

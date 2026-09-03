@@ -57,11 +57,12 @@ public class LibraryController {
             @RequestHeader(value = RequestIds.HEADER_NAME, required = false) String suppliedRequestId,
             @RequestParam(defaultValue = "0") @Min(0) int offset,
             @RequestParam(defaultValue = "100") @Min(1) @Max(200) int limit,
+            @RequestParam(required = false) LibraryStateFilter libraryState,
             HttpServletRequest servletRequest
     ) {
         String requestId = requestId(suppliedRequestId, servletRequest);
         validatePagination(offset, limit);
-        return ok(libraryService.listFiles(offset, limit, requestId), requestId);
+        return ok(libraryService.listFiles(offset, limit, libraryState, requestId), requestId);
     }
 
     @PostMapping(
@@ -203,11 +204,11 @@ public class LibraryController {
                     false
             );
         }
-        if (!MediaType.APPLICATION_PDF_VALUE.equalsIgnoreCase(file.getContentType())) {
+        if (!isAcceptedPdfContentType(file.getContentType())) {
             throw new ApiException(
                     HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                     "UNSUPPORTED_MEDIA_TYPE",
-                    "只支持 application/pdf 文本型 PDF。",
+                    "只支持 PDF 文件。",
                     false
             );
         }
@@ -233,6 +234,13 @@ public class LibraryController {
                     false
             );
         }
+    }
+
+    private boolean isAcceptedPdfContentType(String contentType) {
+        return contentType == null
+                || contentType.isBlank()
+                || MediaType.APPLICATION_PDF_VALUE.equalsIgnoreCase(contentType)
+                || MediaType.APPLICATION_OCTET_STREAM_VALUE.equalsIgnoreCase(contentType);
     }
 
     private ApiException invalidUpload(String message) {

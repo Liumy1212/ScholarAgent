@@ -7,6 +7,7 @@ import type {
   LibraryScan,
   LibraryScanItemOutcome,
   LibraryScanItemsPage,
+  LibraryStateFilter,
   Paper,
 } from './types';
 
@@ -17,12 +18,16 @@ export async function getLibraryInfo(signal?: AbortSignal): Promise<LibraryInfo>
 export async function listLibraryFiles(
   offset: number,
   limit: number,
+  libraryState?: LibraryStateFilter,
   signal?: AbortSignal,
 ): Promise<LibraryFilesPage> {
   const query = new URLSearchParams({
     offset: String(offset),
     limit: String(limit),
   });
+  if (libraryState) {
+    query.set('libraryState', libraryState);
+  }
   return (
     await requestJson<LibraryFilesPage>(`/api/v1/library/files?${query}`, {
       signal,

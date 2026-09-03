@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -100,7 +100,7 @@ class PaperListResponse(WireModel):
 
 class DeletePaperResponse(WireModel):
     paper_id: str
-    deleted: bool
+    deleted: Literal[True]
 
 
 class LibraryFileResponse(WireModel):
@@ -162,6 +162,7 @@ class LibraryScanResponse(WireModel):
 
 class LibraryInfoResponse(WireModel):
     root_path: str
+    originals_path: str
     supported_extensions: tuple[str, ...]
     scan_in_progress: bool
     latest_scan: LibraryScanResponse | None

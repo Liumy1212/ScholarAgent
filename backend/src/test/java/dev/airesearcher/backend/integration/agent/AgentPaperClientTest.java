@@ -3,6 +3,8 @@ package dev.airesearcher.backend.integration.agent;
 import dev.airesearcher.backend.common.error.ApiException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
@@ -75,11 +77,155 @@ class AgentPaperClientTest {
                 });
     }
 
+    @Test
+    void deletesPaperKnowledgeAndForwardsRequestId() {
+        AtomicReference<String> requestLine = new AtomicReference<>();
+        AtomicReference<String> requestId = new AtomicReference<>();
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> {
+                    requestLine.set(request.method().name() + " " + request.uri());
+                    requestId.set(request.requestHeaders().get("X-Request-Id"));
+                    return response.status(200)
+                            .header("Content-Type", "application/json")
+                            .sendString(Mono.just("{\"paperId\":\"paper-001\",\"deleted\":true}"))
+                            .then();
+                })
+                .bindNow();
+
+        var deleted = client().delete("paper-001", "req-delete-paper");
+
+        assertThat(requestLine).hasValue("DELETE /agent-api/v1/papers/paper-001");
+        assertThat(requestId).hasValue("req-delete-paper");
+        assertThat(deleted.paperId()).isEqualTo("paper-001");
+        assertThat(deleted.deleted()).isTrue();
+    }
+
+    @Test
+    void preservesPaperBusyStatusCodeAndRetryableSemantics() {
+        server = errorServer(409, "PAPER_BUSY", true);
+
+        assertThatThrownBy(() -> client().delete("paper-001", "req-delete-busy"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                    assertThat(exception.code()).isEqualTo("PAPER_BUSY");
+                    assertThat(exception.retryable()).isTrue();
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"QDRANT_UNAVAILABLE", "DATABASE_UNAVAILABLE"})
+    void mapsDeleteDependencyFailuresToAgentUnavailable(String downstreamCode) {
+        server = errorServer(503, downstreamCode, true);
+
+        assertThatThrownBy(() -> client().delete("paper-001", "req-delete-dependency"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status())
+                            .isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.code()).isEqualTo("AGENT_UNAVAILABLE");
+                    assertThat(exception.retryable()).isTrue();
+                });
+    }
+
+    @Test
+    void mapsMalformedDeleteResponseToProtocolError() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(200)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("not-json"))
+                        .then())
+                .bindNow();
+
+        assertThatThrownBy(() -> client().delete("paper-001", "req-delete-protocol"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status())
+                            .isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.code()).isEqualTo("AGENT_ERROR");
+                    assertThat(exception.retryable()).isTrue();
+                });
+    }
+
+    @Test
+    void rejectsDeleteResponseThatDoesNotConfirmDeletion() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(200)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("{\"paperId\":\"paper-001\",\"deleted\":false}"))
+                        .then())
+                .bindNow();
+
+        assertThatThrownBy(() -> client().delete("paper-001", "req-delete-protocol"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status())
+                            .isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.code()).isEqualTo("AGENT_ERROR");
+                });
+    }
+
+    @Test
+    void rejectsDeleteResponseForAnotherPaper() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(200)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("{\"paperId\":\"paper-other\",\"deleted\":true}"))
+                        .then())
+                .bindNow();
+
+        assertThatThrownBy(() -> client().delete("paper-001", "req-delete-protocol"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status())
+                            .isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.code()).isEqualTo("AGENT_ERROR");
+                });
+    }
+
+    @Test
+    void mapsDeleteTimeoutToGatewayTimeout() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> Mono.never())
+                .bindNow();
+
+        assertThatThrownBy(() -> client(Duration.ofMillis(50))
+                        .delete("paper-001", "req-delete-timeout"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status())
+                            .isEqualTo(org.springframework.http.HttpStatus.GATEWAY_TIMEOUT);
+                    assertThat(exception.code()).isEqualTo("AGENT_TIMEOUT");
+                    assertThat(exception.retryable()).isTrue();
+                });
+    }
+
+    private DisposableServer errorServer(int status, String code, boolean retryable) {
+        return HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(status)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("""
+                                {"schemaVersion":"1.0","code":"%s","message":"downstream failure","requestId":"req-delete","retryable":%s}
+                                """.formatted(code, retryable)))
+                        .then())
+                .bindNow();
+    }
+
     private AgentPaperClient client() {
+        return client(Duration.ofSeconds(2));
+    }
+
+    private AgentPaperClient client(Duration openTimeout) {
         URI baseUrl = URI.create("http://127.0.0.1:" + server.port());
         return new AgentPaperClient(
                 WebClient.builder().baseUrl(baseUrl.toString()).build(),
-                new AgentProperties(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(2))
+                new AgentProperties(baseUrl, Duration.ofSeconds(1), openTimeout)
         );
     }
 }

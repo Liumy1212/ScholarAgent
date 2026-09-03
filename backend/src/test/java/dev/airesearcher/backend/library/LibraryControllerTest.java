@@ -10,6 +10,9 @@ import dev.airesearcher.backend.paper.Paper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
@@ -56,7 +59,7 @@ class LibraryControllerTest {
 
     @Test
     void wrapsLibraryPaginationAndPreservesRequestId() throws Exception {
-        when(libraryService.listFiles(20, 10, "req-library-list"))
+        when(libraryService.listFiles(20, 10, null, "req-library-list"))
                 .thenReturn(new LibraryFilesPage(List.of(libraryFile()), 21, 20, 10));
 
         mockMvc.perform(get("/api/v1/library/files")
@@ -75,9 +78,42 @@ class LibraryControllerTest {
     }
 
     @Test
+    void validatesAndForwardsLibraryState() throws Exception {
+        for (LibraryStateFilter state : LibraryStateFilter.values()) {
+            when(libraryService.listFiles(0, 100, state, "req-" + state.name()))
+                    .thenReturn(new LibraryFilesPage(List.of(), 0, 0, 100));
+
+            mockMvc.perform(get("/api/v1/library/files")
+                            .queryParam("libraryState", state.name())
+                            .header("X-Request-Id", "req-" + state.name()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.total").value(0));
+
+            verify(libraryService).listFiles(0, 100, state, "req-" + state.name());
+        }
+    }
+
+    @Test
+    void rejectsInvalidLibraryStateBeforeCallingService() throws Exception {
+        mockMvc.perform(get("/api/v1/library/files")
+                        .queryParam("libraryState", "missing")
+                        .header("X-Request-Id", "req-invalid-library-state"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        verify(libraryService, never()).listFiles(
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString()
+        );
+    }
+
+    @Test
     void returnsLibraryInfoAndUploadsWithoutStartingIngestion() throws Exception {
         LibraryInfo info = new LibraryInfo(
                 "D:/papers",
+                "D:/papers/originals",
                 List.of(".pdf"),
                 false,
                 null
@@ -97,6 +133,7 @@ class LibraryControllerTest {
         mockMvc.perform(get("/api/v1/library").header("X-Request-Id", "req-library-info"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.rootPath").value("D:/papers"))
+                .andExpect(jsonPath("$.data.originalsPath").value("D:/papers/originals"))
                 .andExpect(jsonPath("$.data.supportedExtensions[0]").value(".pdf"));
 
         mockMvc.perform(multipart("/api/v1/library/files")
@@ -108,6 +145,65 @@ class LibraryControllerTest {
 
         verify(libraryService, never()).ingest(
                 org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString()
+        );
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {
+            MediaType.APPLICATION_PDF_VALUE,
+            MediaType.APPLICATION_OCTET_STREAM_VALUE
+    })
+    void acceptsContractPdfContentTypes(String contentType) throws Exception {
+        when(libraryService.upload(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq("req-upload-content-type")
+        )).thenReturn(new LibraryFileUploadData(libraryFile(), false));
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "paper.pdf",
+                contentType,
+                "%PDF-test".getBytes()
+        );
+
+        mockMvc.perform(multipart("/api/v1/library/files")
+                        .file(file)
+                        .header("X-Request-Id", "req-upload-content-type"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void rejectsInvalidExtensionEmptyFileUnsupportedMimeAndOversize() throws Exception {
+        MockMultipartFile invalidExtension = new MockMultipartFile(
+                "file", "paper.txt", MediaType.APPLICATION_PDF_VALUE, "%PDF-test".getBytes()
+        );
+        MockMultipartFile empty = new MockMultipartFile(
+                "file", "paper.pdf", MediaType.APPLICATION_PDF_VALUE, new byte[0]
+        );
+        MockMultipartFile unsupportedMime = new MockMultipartFile(
+                "file", "paper.pdf", MediaType.TEXT_PLAIN_VALUE, "%PDF-test".getBytes()
+        );
+        MockMultipartFile oversized = new MockMultipartFile(
+                "file", "paper.pdf", MediaType.APPLICATION_PDF_VALUE, "%PDF-test".getBytes()
+        ) {
+            @Override
+            public long getSize() {
+                return 50L * 1024L * 1024L + 1L;
+            }
+        };
+
+        mockMvc.perform(multipart("/api/v1/library/files").file(invalidExtension))
+                .andExpect(status().isUnsupportedMediaType());
+        mockMvc.perform(multipart("/api/v1/library/files").file(empty))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(multipart("/api/v1/library/files").file(unsupportedMime))
+                .andExpect(status().isUnsupportedMediaType());
+        mockMvc.perform(multipart("/api/v1/library/files").file(oversized))
+                .andExpect(status().isPayloadTooLarge());
+
+        verify(libraryService, never()).upload(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString()
         );
     }

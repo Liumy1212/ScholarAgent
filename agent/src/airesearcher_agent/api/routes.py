@@ -26,7 +26,7 @@ from airesearcher_agent.application.library_lifecycle import LibraryLifecycleSer
 from airesearcher_agent.application.library_scans import LibraryScanService
 from airesearcher_agent.application.papers import PaperService
 from airesearcher_agent.application.stream_chat import StreamChatCommand, StreamChatUseCase
-from airesearcher_agent.domain.library import LibraryScanItemOutcome
+from airesearcher_agent.domain.library import LibraryScanItemOutcome, LibraryStateFilter
 
 RequestIdHeader = Annotated[
     str,
@@ -97,8 +97,13 @@ def create_agent_router(
         request_id: RequestIdHeader,
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 100,
+        library_state: Annotated[LibraryStateFilter | None, Query(alias="libraryState")] = None,
     ) -> LibraryFilesPageResponse:
-        result = library_file_service.list_files(offset=offset, limit=limit)
+        result = library_file_service.list_files(
+            offset=offset,
+            limit=limit,
+            library_state=library_state,
+        )
         response.headers["X-Request-Id"] = request_id
         return LibraryFilesPageResponse.model_validate(result)
 

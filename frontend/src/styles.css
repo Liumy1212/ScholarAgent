@@ -183,6 +183,13 @@ textarea {
   padding-top: 18px;
 }
 
+.library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
 .pdf-preview {
   display: block;
   width: 100%;

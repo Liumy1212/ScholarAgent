@@ -4,8 +4,9 @@
 后续再次运行。当前尚未提供 Linux/macOS 等价启动脚本，也没有全栈生产部署方案。
 
 当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理论文原件，默认值为仓库内被 Git
-忽略的 `.private/paper-library`。三端已支持原件登记、扫描、手动入库及排除/恢复，并已
-通过本文所述的合成 PDF 全栈冒烟；以下步骤继续作为本机复验流程。
+忽略的 `.private/paper-library`。扫描器实际递归遍历 `originals/`，网页/API 上传固定进入
+`originals/uploads/`。三端已支持原件登记、扫描、状态筛选、手动入库、知识删除及兼容性
+排除/恢复；以下步骤是本机端到端复验流程。
 
 ## 1. 环境与版本要求
 
@@ -240,19 +241,31 @@ New-Item -ItemType Directory .\.private\paper-library\originals\smoke -Force
 Copy-Item -LiteralPath $demoPdf -Destination .\.private\paper-library\originals\smoke\demo.pdf
 ```
 
-随后通过 Java API 执行以下闭环：
+随后通过 React 页面和 Java API 执行以下闭环：
 
-1. `POST /api/v1/library/scans`，轮询返回的 `scanId` 到 `SUCCEEDED`。
-2. `GET /api/v1/library/files`，确认 `smoke/demo.pdf` 为 `AVAILABLE + NOT_INGESTED`。
-3. 对其调用 `POST /api/v1/library/files/{libraryFileId}/ingestion`，轮询任务到 `READY`。
-4. 打开 <http://127.0.0.1:5173> 的问答页，完成检索、引用和 PDF Range 预览验证。
-5. 调用 `POST /api/v1/papers/{paperId}/exclusion`，确认其不可检索；再调用对应 `DELETE`
-   恢复并等待重新入库。
-6. 分别移动、替换和移走合成 PDF，每次重新扫描并核对 `MOVED`、`REPLACED`、`MISSING`。
+1. 在页面上传一份唯一命名的合成 PDF，确认响应路径位于 `uploads/`，磁盘原件存在，页面
+   立即显示“尚未存入知识库”。
+2. 将另一份唯一命名的合成 PDF 复制到 `originals/` 的测试子目录，点击“扫描文件夹”，轮询
+   `scanId` 到 `SUCCEEDED`，确认新原件出现且未自动创建入库任务。
+3. 分别请求不带筛选、`libraryState=NOT_INGESTED`、`ORIGINAL_MISSING` 和 `INGESTED` 的列表，
+   核对每页 `items`、`total` 与分页边界。
+4. 对单篇调用 `POST /api/v1/library/files/{libraryFileId}/ingestion`，等待任务和 Paper 到
+   `READY`，确认它进入“已存入知识库”筛选并可在 Chat 中检索与引用。
+5. 将已入库的测试 PDF 移出 `originals/` 后再次扫描，确认行变为 `MISSING`、Paper/chunk/向量
+   没有被扫描自动删除，但该 Paper 立即退出 Chat 可检索范围。
+6. 对缺失行调用 `DELETE /api/v1/papers/{paperId}`，确认 Paper、任务、chunk、向量和缺失登记
+   被清理。
+7. 对另一篇原件仍存在的已入库测试论文调用同一删除接口，确认 PDF 仍在、原件行回到
+   `AVAILABLE + NOT_INGESTED`。
+8. 对活动任务验证 `409 PAPER_BUSY`；若模拟 Qdrant 故障，确认返回可重试错误、Paper 保持
+   不可检索、原件不受影响，服务恢复后重复删除可完成。
 
-当前版本已使用合成 PDF 完成上述闭环，并在 React 页面验证原件库路径、手动扫描、统一清单、
-`MISSING/REPLACED` 禁用状态及 Chat 的可检索论文过滤。复验仍只使用合成或用户有权处理的
-论文。
+复验只能使用合成或用户明确有权处理的论文；测试文件使用唯一名称，且不得通过清空数据库、
+Qdrant volume 或原件目录来准备环境。知识删除不等于原件删除：它只清理数据库知识对象和向量，
+不会删除或移动任何仍存在的 PDF。
+
+上述闭环已经用仓库外生成的两份合成 PDF 完成全栈验收，覆盖上传、扫描、三类筛选、入库、
+Chat 检索与页码引用、原件缺失同步，以及缺失/可用两种状态下的知识删除边界。
 
 ## 4. 后续再次运行
 
@@ -376,7 +389,7 @@ pnpm dev
 
 | 数据 | 默认或配置位置 | 普通 `down` 是否保留 |
 | --- | --- | --- |
-| PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/originals/` | 是 |
+| PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/originals/`；网页上传位于其 `uploads/` 子目录 | 是 |
 | 上传暂存 | `AIRESEARCHER_PAPER_LIBRARY_DIR/.staging/` | 是 |
 | embedding/reranker | `AIRESEARCHER_MODEL_CACHE_DIR` | 是 |
 | MySQL | `airesearcher_mysql_data` named volume | 是 |

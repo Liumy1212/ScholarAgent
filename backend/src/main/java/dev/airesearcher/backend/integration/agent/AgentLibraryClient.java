@@ -9,6 +9,7 @@ import dev.airesearcher.backend.library.LibraryInfo;
 import dev.airesearcher.backend.library.LibraryScan;
 import dev.airesearcher.backend.library.LibraryScanItemOutcome;
 import dev.airesearcher.backend.library.LibraryScanItemsPage;
+import dev.airesearcher.backend.library.LibraryStateFilter;
 import dev.airesearcher.backend.paper.Paper;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
@@ -45,13 +46,14 @@ public class AgentLibraryClient {
                 .exchangeToMono(response -> decode(response, LibraryInfo.class)));
     }
 
-    public LibraryFilesPage listFiles(int offset, int limit, String requestId) {
+    public LibraryFilesPage listFiles(
+            int offset,
+            int limit,
+            LibraryStateFilter libraryState,
+            String requestId
+    ) {
         return await(webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/agent-api/v1/library/files")
-                        .queryParam("offset", offset)
-                        .queryParam("limit", limit)
-                        .build())
+                .uri(uriBuilder -> libraryFilesUri(uriBuilder, offset, limit, libraryState))
                 .header(RequestIds.HEADER_NAME, requestId)
                 .accept(MediaType.APPLICATION_JSON)
                 .exchangeToMono(response -> decode(response, LibraryFilesPage.class)));
@@ -124,6 +126,22 @@ public class AgentLibraryClient {
                 .header(RequestIds.HEADER_NAME, requestId)
                 .accept(MediaType.APPLICATION_JSON)
                 .exchangeToMono(response -> decode(response, Paper.class)));
+    }
+
+    private URI libraryFilesUri(
+            UriBuilder uriBuilder,
+            int offset,
+            int limit,
+            LibraryStateFilter libraryState
+    ) {
+        UriBuilder builder = uriBuilder
+                .path("/agent-api/v1/library/files")
+                .queryParam("offset", offset)
+                .queryParam("limit", limit);
+        if (libraryState != null) {
+            builder.queryParam("libraryState", libraryState.name());
+        }
+        return builder.build();
     }
 
     private URI scanItemsUri(

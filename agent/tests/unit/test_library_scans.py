@@ -14,6 +14,7 @@ from airesearcher_agent.domain.library import (
     LibraryScanItemOutcome,
     LibraryScanStatus,
 )
+from airesearcher_agent.domain.papers import IngestionJobStatus, IngestionStage, PaperStatus
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import (
     ChunkRecord,
@@ -23,6 +24,7 @@ from airesearcher_agent.persistence.models import (
     PaperRecord,
     utc_now,
 )
+from airesearcher_agent.persistence.repositories import ready_paper_ids
 from airesearcher_agent.worker.library_scan import (
     REPARSE_POINT_ATTRIBUTE,
     LibraryScanWorker,
@@ -72,6 +74,66 @@ def _domain_counts(database: Database) -> tuple[int, int, int]:
             int(session.scalar(select(func.count()).select_from(IngestionJobRecord)) or 0),
             int(session.scalar(select(func.count()).select_from(ChunkRecord)) or 0),
         )
+
+
+def _link_ready_paper(database: Database, library_file_id: str, storage_path: Path) -> str:
+    now = utc_now()
+    paper_id = f"paper-{library_file_id.removeprefix('library-file-')}"
+    with database.transaction() as session:
+        source = session.get(LibraryFileRecord, library_file_id)
+        assert source is not None
+        session.add(
+            PaperRecord(
+                id=paper_id,
+                sha256=source.sha256,
+                title="Synthetic linked paper",
+                authors=[],
+                publication_year=None,
+                original_filename=source.file_name,
+                storage_path=str(storage_path),
+                file_size_bytes=source.file_size_bytes,
+                page_count=1,
+                status=PaperStatus.READY.value,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.flush()
+        source.paper_id = paper_id
+        session.add(
+            IngestionJobRecord(
+                id=f"job-{library_file_id.removeprefix('library-file-')}",
+                paper_id=paper_id,
+                active_key=None,
+                status=IngestionJobStatus.SUCCEEDED.value,
+                stage=IngestionStage.COMPLETED.value,
+                attempt=1,
+                max_attempts=3,
+                failure_code=None,
+                failure_message=None,
+                failure_retryable=False,
+                available_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                created_at=now,
+                updated_at=now,
+                started_at=now,
+                completed_at=now,
+            )
+        )
+        session.add(
+            ChunkRecord(
+                id=f"chunk-{library_file_id.removeprefix('library-file-')}",
+                vector_id="00000000-0000-0000-0000-000000000001",
+                paper_id=paper_id,
+                page=1,
+                ordinal=0,
+                text="Synthetic evidence.",
+                quote="Synthetic evidence.",
+                created_at=now,
+            )
+        )
+    return paper_id
 
 
 def test_scan_registers_new_file_then_reports_unchanged_without_ingestion(
@@ -195,6 +257,27 @@ def test_scan_replaces_changed_content_at_same_path(tmp_path: Path) -> None:
 
     scan_id = _run_scan(scans, worker)
     items = library_files.list_files(offset=0, limit=100).items
+    available = items[0]
+
+    assert scans.get_scan(scan_id).registered_count == 1
+    assert available.library_file_id != old_id
+    assert available.source_status is LibraryFileSourceStatus.AVAILABLE
+    assert available.relative_path == "paper.pdf"
+    assert len(items) == 1
+
+
+def test_scan_preserves_replaced_record_when_it_still_has_knowledge(tmp_path: Path) -> None:
+    database, library_files, scans, worker = _services(tmp_path)
+    settings = runtime_settings(tmp_path)
+    path = settings.paper_library_originals_dir / "paper.pdf"
+    _write_pdf(path, "linked-version-one")
+    _run_scan(scans, worker)
+    old_id = library_files.list_files(offset=0, limit=100).items[0].library_file_id
+    paper_id = _link_ready_paper(database, old_id, path)
+    _write_pdf(path, "linked-version-two")
+
+    _run_scan(scans, worker)
+    items = library_files.list_files(offset=0, limit=100).items
     available = next(
         item for item in items if item.source_status is LibraryFileSourceStatus.AVAILABLE
     )
@@ -202,13 +285,14 @@ def test_scan_replaces_changed_content_at_same_path(tmp_path: Path) -> None:
         item for item in items if item.source_status is LibraryFileSourceStatus.REPLACED
     )
 
-    assert scans.get_scan(scan_id).registered_count == 1
-    assert available.library_file_id != old_id
+    assert available.paper_id is None
     assert replaced.library_file_id == old_id
+    assert replaced.paper_id == paper_id
     assert available.relative_path == replaced.relative_path == "paper.pdf"
+    assert _domain_counts(database) == (1, 1, 1)
 
 
-def test_scan_marks_disappeared_original_missing(tmp_path: Path) -> None:
+def test_scan_removes_disappeared_original_without_knowledge(tmp_path: Path) -> None:
     _database, library_files, scans, worker = _services(tmp_path)
     settings = runtime_settings(tmp_path)
     path = settings.paper_library_originals_dir / "paper.pdf"
@@ -217,10 +301,30 @@ def test_scan_marks_disappeared_original_missing(tmp_path: Path) -> None:
     path.unlink()
 
     scan_id = _run_scan(scans, worker)
-    original = library_files.list_files(offset=0, limit=100).items[0]
 
     assert scans.get_scan(scan_id).status is LibraryScanStatus.SUCCEEDED
+    assert library_files.list_files(offset=0, limit=100).total == 0
+
+
+def test_scan_marks_linked_original_missing_without_deleting_knowledge(tmp_path: Path) -> None:
+    database, library_files, scans, worker = _services(tmp_path)
+    settings = runtime_settings(tmp_path)
+    path = settings.paper_library_originals_dir / "paper.pdf"
+    _write_pdf(path, "linked-missing")
+    _run_scan(scans, worker)
+    original_id = library_files.list_files(offset=0, limit=100).items[0].library_file_id
+    paper_id = _link_ready_paper(database, original_id, path)
+    path.unlink()
+
+    _run_scan(scans, worker)
+    original = library_files.list_files(offset=0, limit=100).items[0]
+
     assert original.source_status is LibraryFileSourceStatus.MISSING
+    assert original.paper_id == paper_id
+    assert original.searchable is False
+    assert _domain_counts(database) == (1, 1, 1)
+    with database.session() as session:
+        assert ready_paper_ids(session, (paper_id,)) == ()
 
 
 def test_single_file_failure_is_reported_without_failing_scan(tmp_path: Path) -> None:

@@ -23,6 +23,12 @@ class LibraryFileKnowledgeStatus(StrEnum):
     EXCLUDED = "EXCLUDED"
 
 
+class LibraryStateFilter(StrEnum):
+    ORIGINAL_MISSING = "ORIGINAL_MISSING"
+    NOT_INGESTED = "NOT_INGESTED"
+    INGESTED = "INGESTED"
+
+
 class LibraryScanStatus(StrEnum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
@@ -115,6 +121,7 @@ class LibraryScanView:
 @dataclass(frozen=True, slots=True)
 class LibraryInfoView:
     root_path: str
+    originals_path: str
     supported_extensions: tuple[str, ...]
     scan_in_progress: bool
     latest_scan: LibraryScanView | None

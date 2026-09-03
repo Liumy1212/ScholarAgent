@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import stat
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -412,13 +413,12 @@ class LibraryScanWorker:
                 None,
             )
             if exact_same is not None:
-                for record in exact_records:
-                    if (
-                        record.id != exact_same.id
-                        and record.source_status == LibraryFileSourceStatus.AVAILABLE.value
-                    ):
-                        record.source_status = LibraryFileSourceStatus.REPLACED.value
-                        record.updated_at = now
+                self._retire_replaced_records(
+                    session,
+                    exact_records,
+                    keep_id=exact_same.id,
+                    now=now,
+                )
                 self._refresh_record(exact_same, fingerprint, now)
                 self._link_existing_paper(session, exact_same)
                 matched_ids.add(exact_same.id)
@@ -437,10 +437,7 @@ class LibraryScanWorker:
                 None,
             )
             if current_at_path is not None:
-                for record in exact_records:
-                    if record.source_status == LibraryFileSourceStatus.AVAILABLE.value:
-                        record.source_status = LibraryFileSourceStatus.REPLACED.value
-                        record.updated_at = now
+                self._retire_replaced_records(session, exact_records, keep_id=None, now=now)
                 created = self._new_record(session, fingerprint, now)
                 session.add(created)
                 session.flush()
@@ -545,8 +542,11 @@ class LibraryScanWorker:
             if protected_keys:
                 statement = statement.where(LibraryFileRecord.path_key.not_in(protected_keys))
             for record in session.scalars(statement).all():
-                record.source_status = LibraryFileSourceStatus.MISSING.value
-                record.updated_at = now
+                if record.paper_id is None:
+                    session.delete(record)
+                else:
+                    record.source_status = LibraryFileSourceStatus.MISSING.value
+                    record.updated_at = now
             self._renew(scan, now)
 
     def _complete(self, claimed: ClaimedScan) -> None:
@@ -665,6 +665,23 @@ class LibraryScanWorker:
         record.source_status = LibraryFileSourceStatus.AVAILABLE.value
         record.last_seen_at = now
         record.updated_at = now
+
+    @staticmethod
+    def _retire_replaced_records(
+        session: Session,
+        records: Sequence[LibraryFileRecord],
+        *,
+        keep_id: str | None,
+        now: datetime,
+    ) -> None:
+        for record in records:
+            if record.id == keep_id:
+                continue
+            if record.paper_id is None:
+                session.delete(record)
+            else:
+                record.source_status = LibraryFileSourceStatus.REPLACED.value
+                record.updated_at = now
 
     @staticmethod
     def _new_record(

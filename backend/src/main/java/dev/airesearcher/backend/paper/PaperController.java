@@ -167,11 +167,11 @@ public class PaperController {
                     false
             );
         }
-        if (!MediaType.APPLICATION_PDF_VALUE.equalsIgnoreCase(file.getContentType())) {
+        if (!isAcceptedPdfContentType(file.getContentType())) {
             throw new ApiException(
                     HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                     "UNSUPPORTED_MEDIA_TYPE",
-                    "只支持 application/pdf 文本型 PDF。",
+                    "只支持 PDF 文件。",
                     false
             );
         }
@@ -186,6 +186,13 @@ public class PaperController {
                     false
             );
         }
+    }
+
+    private boolean isAcceptedPdfContentType(String contentType) {
+        return contentType == null
+                || contentType.isBlank()
+                || MediaType.APPLICATION_PDF_VALUE.equalsIgnoreCase(contentType)
+                || MediaType.APPLICATION_OCTET_STREAM_VALUE.equalsIgnoreCase(contentType);
     }
 
     private ApiException invalidUpload(String message) {

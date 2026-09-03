@@ -1,18 +1,21 @@
 # AIResearcher
 
 AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库项目。当前已经完成可运行的
-单篇论文 RAG 闭环，并在三端实现本地论文原件库、扫描、手动入库和排除/恢复能力。阶段
-1.4 的模块检查与合成 PDF 全栈冒烟均已通过。
+单篇论文 RAG 闭环，并在三端实现本地论文原件库、扫描、筛选、手动入库和知识删除能力。
+阶段 1.4 的原件库基线与日常操作修复均已通过合成 PDF 全栈冒烟及三端模块检查，详细
+验收状态见路线图。
 
 ## 当前能力
 
 当前实现支持：
 
 - React 仅通过 Java BFF 访问 Python Agent。
-- Python 在 `.private/paper-library/originals/` 管理 PDF 原件，并把登记与知识库入库分开。
-- Agent 与 Java 提供原件上传、分页清单、目录扫描、手动入库、排除/恢复和 PDF Range 接口。
-- React 展示统一原件清单、扫描结果、入库进度和可检索状态，并提供逐篇入库、重试、排除
-  与恢复操作；网页上传只保存原件。
+- Python 在 `.private/paper-library/originals/` 管理 PDF 原件；网页上传保存到
+  `originals/uploads/`，登记、扫描与知识库入库彼此分开。
+- Agent 与 Java 提供原件上传、服务端状态筛选、目录扫描、手动入库、知识删除、兼容性
+  排除/恢复和 PDF Range 接口。
+- React 展示实际扫描目录、统一原件清单、筛选后的总数、入库进度和可检索状态，并提供
+  逐篇入库、重试、PDF 预览与知识删除；网页上传和扫描都不会自动入库。
 - Chat 只允许选择 `searchable=true` 的论文。
 - 兼容性上传仍可由 Python Worker 完成解析、按页切块和后台建库。
 - 使用 BGE-M3 embedding、Qdrant 检索和本地 Rerank。
@@ -27,7 +30,7 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 → 展示论文证据与页码引用
 ```
 
-当前 React 页面已经切换到统一原件清单，不再提供本地原件硬删除。阶段完成状态见
+当前 React 页面已经切换到统一原件清单，只提供知识删除，不提供 PDF 原件硬删除。阶段完成状态见
 [长期路线图](docs/roadmap.md)；阶段 1.4 已完成，MCP 获取和 PDF 之外的解析器仍属于后续规划。
 
 ## 调用链
@@ -89,6 +92,6 @@ Copy-Item .\.env.example .\.env
 ## 数据安全
 
 `.env`、API Key、密码、真实 PDF、数据库、向量、模型、缓存和日志不得提交到 Git。
-论文原件位于被 Git 忽略的 `.private/paper-library/`，模型缓存必须位于仓库外；MySQL 与
-Qdrant 数据保存在 Docker named volume 中。仓库只接收代码、非敏感配置模板、迁移、合成
-测试数据和公开文档。
+论文原件位于被 Git 忽略的 `.private/paper-library/originals/`，其中网页上传进入
+`originals/uploads/`；模型缓存必须位于仓库外，MySQL 与 Qdrant 数据保存在 Docker named
+volume 中。仓库只接收代码、非敏感配置模板、迁移、合成测试数据和公开文档。

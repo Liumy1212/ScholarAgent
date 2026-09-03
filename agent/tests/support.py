@@ -33,7 +33,7 @@ class MemoryUpload:
         content: bytes,
         *,
         filename: str = "paper.pdf",
-        content_type: str = "application/pdf",
+        content_type: str | None = "application/pdf",
     ) -> None:
         self._content = content
         self._offset = 0
@@ -45,7 +45,7 @@ class MemoryUpload:
         return self._filename
 
     @property
-    def content_type(self) -> str:
+    def content_type(self) -> str | None:
         return self._content_type
 
     async def read(self, size: int = -1) -> bytes:

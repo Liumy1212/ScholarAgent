@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -17,25 +18,25 @@ import {
 } from 'antd';
 import {
   createLibraryScan,
-  excludePaper,
   getLibraryInfo,
   getLibraryScan,
   ingestLibraryFile,
   libraryFileUrl,
   listLibraryFiles,
   listLibraryScanItems,
-  restorePaper,
   uploadLibraryFile,
 } from '../api/library';
-import { PaperApiError, retryIngestionJob } from '../api/papers';
+import { deletePaper, PaperApiError, retryIngestionJob } from '../api/papers';
 import type {
   IngestionStage,
   LibraryFile,
   LibraryFileKnowledgeStatus,
+  LibraryFileUploadData,
   LibraryInfo,
   LibraryScan,
   LibraryScanItem,
   LibraryScanStatus,
+  LibraryStateFilter,
   PaperSourceStatus,
 } from '../api/types';
 
@@ -48,12 +49,22 @@ const KNOWLEDGE_VIEW: Record<
   LibraryFileKnowledgeStatus,
   { color: string; label: string }
 > = {
-  NOT_INGESTED: { color: 'default', label: '未录入知识库' },
+  NOT_INGESTED: { color: 'default', label: '未存入知识库' },
   PROCESSING: { color: 'processing', label: '入库中' },
-  READY: { color: 'success', label: '已录入' },
+  READY: { color: 'success', label: '已存入知识库' },
   FAILED: { color: 'error', label: '入库失败' },
-  EXCLUDED: { color: 'warning', label: '已移出知识库' },
+  EXCLUDED: { color: 'warning', label: '兼容排除状态' },
 };
+
+const LIBRARY_FILTERS: ReadonlyArray<{
+  label: string;
+  value: LibraryStateFilter | null;
+}> = [
+  { label: '全部', value: null },
+  { label: '原件缺失', value: 'ORIGINAL_MISSING' },
+  { label: '未存入知识库', value: 'NOT_INGESTED' },
+  { label: '已存入知识库', value: 'INGESTED' },
+];
 
 const SOURCE_VIEW: Record<PaperSourceStatus, { color: string; label: string }> = {
   AVAILABLE: { color: 'blue', label: '原件可用' },
@@ -106,6 +117,13 @@ function isActiveScan(scan: LibraryScan | null): boolean {
   return scan?.status === 'QUEUED' || scan?.status === 'RUNNING';
 }
 
+function hasActiveIngestionJob(file: LibraryFile): boolean {
+  return (
+    file.currentIngestion?.status === 'QUEUED' ||
+    file.currentIngestion?.status === 'RUNNING'
+  );
+}
+
 function unavailableMessage(status: PaperSourceStatus): string | null {
   if (status === 'MISSING') {
     return '文件夹中已找不到该原件，请恢复文件后重新扫描。';
@@ -121,7 +139,9 @@ export function KnowledgeBasePage() {
   const [files, setFiles] = useState<LibraryFile[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [libraryState, setLibraryState] = useState<LibraryStateFilter | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadResult, setUploadResult] = useState<LibraryFileUploadData | null>(null);
   const [preview, setPreview] = useState<LibraryFile | null>(null);
   const [latestScan, setLatestScan] = useState<LibraryScan | null>(null);
   const [scanItems, setScanItems] = useState<LibraryScanItem[]>([]);
@@ -133,16 +153,21 @@ export function KnowledgeBasePage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(
-    async (foreground = true) => {
+    async (
+      foreground = true,
+      requestedOffset = offset,
+      requestedState = libraryState,
+    ) => {
       if (foreground) {
         setLoading(true);
       }
       try {
         const [info, page] = await Promise.all([
           getLibraryInfo(),
-          listLibraryFiles(offset, PAGE_SIZE),
+          listLibraryFiles(requestedOffset, PAGE_SIZE, requestedState ?? undefined),
         ]);
         setLibrary(info);
         setLatestScan(info.latestScan);
@@ -157,7 +182,7 @@ export function KnowledgeBasePage() {
         }
       }
     },
-    [offset],
+    [libraryState, offset],
   );
 
   useEffect(() => {
@@ -212,32 +237,40 @@ export function KnowledgeBasePage() {
   const selectFile = (file: File | null) => {
     setNotice(null);
     setError(null);
+    setUploadResult(null);
     if (!file) {
       setSelectedFile(null);
       return;
     }
-    if (
-      !file.name.toLowerCase().endsWith('.pdf') ||
-      file.type !== 'application/pdf'
-    ) {
+    const acceptedMime =
+      file.type === '' ||
+      file.type === 'application/pdf' ||
+      file.type === 'application/octet-stream';
+    if (!file.name.toLowerCase().endsWith('.pdf') || !acceptedMime) {
       setSelectedFile(null);
-      setError('请选择 Content-Type 为 application/pdf 的 PDF 文件。');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setError('请选择扩展名为 .pdf 的 PDF 文件。');
+      return;
+    }
+    if (file.size === 0) {
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setError('PDF 文件不能为空。');
       return;
     }
     if (file.size > MAX_PDF_BYTES) {
       setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       setError('PDF 不能超过 50 MB。');
       return;
     }
     setSelectedFile(file);
-  };
-
-  const refreshFromFirstPage = async () => {
-    if (offset === 0) {
-      await refresh(false);
-    } else {
-      setOffset(0);
-    }
   };
 
   const submitUpload = async () => {
@@ -250,12 +283,20 @@ export function KnowledgeBasePage() {
     try {
       const result = await uploadLibraryFile(selectedFile);
       setSelectedFile(null);
-      setNotice(
-        result.duplicate
-          ? '相同 SHA-256 的原件已经登记，没有重复保存或自动入库。'
-          : '原件已保存，但尚未录入知识库。请在清单中手动确认入库。',
-      );
-      await refreshFromFirstPage();
+      setUploadResult(result);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setLibraryState(null);
+      setOffset(0);
+      setFiles((current) => [
+        result.libraryFile,
+        ...current.filter(
+          (file) => file.libraryFileId !== result.libraryFile.libraryFileId,
+        ),
+      ].slice(0, PAGE_SIZE));
+      setTotal((current) => (result.duplicate ? Math.max(current, 1) : current + 1));
+      await refresh(false, 0, null);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -273,7 +314,7 @@ export function KnowledgeBasePage() {
       setLibrary((current) =>
         current ? { ...current, scanInProgress: true, latestScan: scan } : current,
       );
-      setNotice('扫描任务已创建；扫描只登记原件，不会自动录入知识库。');
+      setNotice('扫描任务已创建；扫描只登记原件，不会自动存入知识库。');
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -318,16 +359,46 @@ export function KnowledgeBasePage() {
     }
   };
 
-  const exclude = async (file: LibraryFile) => {
+  const deleteKnowledge = async (file: LibraryFile) => {
     if (!file.paperId) {
       return;
     }
-    const action = `exclude:${file.libraryFileId}`;
+    const action = `delete:${file.libraryFileId}`;
     setBusyAction(action);
     setError(null);
     try {
-      await excludePaper(file.paperId);
-      setNotice('论文已移出知识库；本地原件仍然保留。');
+      await deletePaper(file.paperId);
+      const originalAvailable = file.sourceStatus === 'AVAILABLE';
+      const remainsInCurrentFilter =
+        originalAvailable &&
+        (libraryState === null || libraryState === 'NOT_INGESTED');
+      const unIngested: LibraryFile = {
+        ...file,
+        knowledgeStatus: 'NOT_INGESTED',
+        paperId: null,
+        paperTitle: null,
+        searchable: false,
+        currentIngestion: null,
+      };
+      setFiles((current) =>
+        current.flatMap((item) => {
+          if (item.libraryFileId !== file.libraryFileId) {
+            return [item];
+          }
+          return remainsInCurrentFilter ? [unIngested] : [];
+        }),
+      );
+      if (!remainsInCurrentFilter) {
+        setTotal((current) => Math.max(0, current - 1));
+      }
+      if (preview?.libraryFileId === file.libraryFileId) {
+        setPreview(null);
+      }
+      setNotice(
+        originalAvailable
+          ? '知识、任务、chunk 和向量已删除；PDF 原件仍保留，当前为未存入知识库。'
+          : '知识、任务、chunk 和向量已删除；缺失原件登记已清理。',
+      );
       await refresh(false);
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -336,22 +407,11 @@ export function KnowledgeBasePage() {
     }
   };
 
-  const restore = async (file: LibraryFile) => {
-    if (!file.paperId) {
-      return;
-    }
-    const action = `restore:${file.libraryFileId}`;
-    setBusyAction(action);
+  const changeLibraryState = (state: LibraryStateFilter | null) => {
+    setLibraryState(state);
+    setOffset(0);
     setError(null);
-    try {
-      await restorePaper(file.paperId);
-      setNotice('论文已恢复，并创建新的后台入库任务。');
-      await refresh(false);
-    } catch (requestError) {
-      setError(errorMessage(requestError));
-    } finally {
-      setBusyAction(null);
-    }
+    setNotice(null);
   };
 
   const showFailedItems = async (scan: LibraryScan) => {
@@ -369,25 +429,26 @@ export function KnowledgeBasePage() {
   };
 
   const renderActions = (file: LibraryFile) => {
-    if (file.sourceStatus !== 'AVAILABLE') {
-      return <Button disabled>请重新扫描</Button>;
-    }
-    switch (file.knowledgeStatus) {
-      case 'NOT_INGESTED':
-        return (
-          <Button
-            type="primary"
-            loading={busyAction === `ingest:${file.libraryFileId}`}
-            onClick={() => void ingest(file)}
-          >
-            录入知识库
-          </Button>
-        );
-      case 'PROCESSING':
-        return <Button disabled>正在入库</Button>;
-      case 'FAILED':
-        return (
-          <>
+    const activeIngestion = hasActiveIngestionJob(file);
+    let primaryAction: ReactNode = null;
+    if (file.sourceStatus === 'AVAILABLE') {
+      switch (file.knowledgeStatus) {
+        case 'NOT_INGESTED':
+          primaryAction = (
+            <Button
+              type="primary"
+              loading={busyAction === `ingest:${file.libraryFileId}`}
+              onClick={() => void ingest(file)}
+            >
+              存入知识库
+            </Button>
+          );
+          break;
+        case 'PROCESSING':
+          primaryAction = <Button disabled>正在存入知识库</Button>;
+          break;
+        case 'FAILED':
+          primaryAction = (
             <Button
               type="primary"
               disabled={!file.currentIngestion?.canRetry}
@@ -396,50 +457,55 @@ export function KnowledgeBasePage() {
             >
               {file.currentIngestion?.canRetry ? '重试入库' : '无法重试'}
             </Button>
-            <Popconfirm
-              title="将论文移出知识库？"
-              description="本地原件会保留，chunk 与向量将被清理。"
-              okText="移出"
-              cancelText="取消"
-              onConfirm={() => exclude(file)}
-            >
-              <Button danger loading={busyAction === `exclude:${file.libraryFileId}`}>
-                移出知识库
-              </Button>
-            </Popconfirm>
-          </>
-        );
-      case 'READY':
-        return (
-          <>
+          );
+          break;
+        case 'READY':
+          primaryAction = (
             <Button onClick={() => setPreview(file)}>预览 PDF</Button>
-            <Popconfirm
-              title="将论文移出知识库？"
-              description="本地原件会保留，chunk 与向量将被清理。"
-              okText="移出"
-              cancelText="取消"
-              onConfirm={() => exclude(file)}
-            >
-              <Button danger loading={busyAction === `exclude:${file.libraryFileId}`}>
-                移出知识库
-              </Button>
-            </Popconfirm>
-          </>
-        );
-      case 'EXCLUDED':
-        return (
-          <>
-            <Button onClick={() => setPreview(file)}>预览 PDF</Button>
-            <Button
-              type="primary"
-              loading={busyAction === `restore:${file.libraryFileId}`}
-              onClick={() => void restore(file)}
-            >
-              重新录入
-            </Button>
-          </>
-        );
+          );
+          break;
+        case 'EXCLUDED':
+          primaryAction = <Button disabled>请先删除旧知识</Button>;
+          break;
+      }
     }
+
+    const deleteDisabled = file.paperId === null || activeIngestion;
+    const deleteButton = (
+      <Button
+        danger
+        disabled={deleteDisabled}
+        title={
+          file.paperId === null
+            ? '暂无知识可删'
+            : activeIngestion
+              ? '入库进行中，暂不能删除知识'
+              : undefined
+        }
+        loading={busyAction === `delete:${file.libraryFileId}`}
+      >
+        删除知识
+      </Button>
+    );
+
+    return (
+      <>
+        {primaryAction}
+        {deleteDisabled ? (
+          deleteButton
+        ) : (
+          <Popconfirm
+            title="删除该论文的知识库内容？"
+            description="只清理知识、任务、chunk 和向量，不会删除 PDF 原件。"
+            okText="确认删除知识"
+            cancelText="取消"
+            onConfirm={() => deleteKnowledge(file)}
+          >
+            {deleteButton}
+          </Popconfirm>
+        )}
+      </>
+    );
   };
 
   const scan = latestScan ?? library?.latestScan ?? null;
@@ -468,18 +534,23 @@ export function KnowledgeBasePage() {
               disabled={scanActive}
               onClick={() => void startScan()}
             >
-              {scanActive ? '扫描进行中' : '手动扫描'}
+              {scanActive ? '扫描进行中' : '扫描文件夹'}
             </Button>
           }
         >
           <Space direction="vertical" size={14} className="full-width">
             <div className="library-location">
-              <Typography.Text type="secondary">原件库路径</Typography.Text>
+              <Typography.Text type="secondary">实际扫描目录</Typography.Text>
               <Typography.Text
                 code
-                copyable={library?.rootPath ? { text: library.rootPath } : false}
+                copyable={
+                  library?.originalsPath ? { text: library.originalsPath } : false
+                }
               >
-                {library?.rootPath ?? '正在读取…'}
+                {library?.originalsPath ?? '正在读取…'}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                可将 PDF 直接放入该目录或任意子目录；扫描只登记和同步状态，不会自动存入知识库。
               </Typography.Text>
             </div>
             <Flex gap={8} align="center" wrap>
@@ -521,13 +592,14 @@ export function KnowledgeBasePage() {
 
         <Card className="surface-card" title="上传 PDF 原件">
           <Space direction="vertical" size={16} className="full-width">
-            <Alert type="info" showIcon message="上传只保存原件，不会自动录入知识库。" />
+            <Alert type="info" showIcon message="上传只保存原件，不会自动存入知识库。" />
             <label className="file-picker">
               <Typography.Text strong>选择单个 PDF</Typography.Text>
               <input
+                ref={fileInputRef}
                 aria-label="选择单个 PDF"
                 type="file"
-                accept="application/pdf,.pdf"
+                accept=".pdf,application/pdf,application/octet-stream"
                 disabled={uploading}
                 onChange={(event) => selectFile(event.target.files?.[0] ?? null)}
               />
@@ -539,10 +611,34 @@ export function KnowledgeBasePage() {
                 <Typography.Text type="secondary">
                   {formatBytes(selectedFile.size)}
                 </Typography.Text>
-                <Button type="primary" loading={uploading} onClick={() => void submitUpload()}>
-                  仅保存原件
-                </Button>
               </Flex>
+            ) : null}
+            <Button
+              type="primary"
+              loading={uploading}
+              disabled={selectedFile === null || uploading}
+              onClick={() => void submitUpload()}
+            >
+              提交 PDF
+            </Button>
+            {uploadResult ? (
+              <Alert
+                type="success"
+                showIcon
+                message="原件已保存"
+                description={
+                  <Space direction="vertical" size={2}>
+                    <Typography.Text>
+                      保存路径：{uploadResult.libraryFile.relativePath}
+                    </Typography.Text>
+                    <Typography.Text>
+                      {uploadResult.duplicate
+                        ? '相同内容的原件已登记；尚未自动存入知识库。'
+                        : '尚未存入知识库，请在下方列表中手动操作。'}
+                    </Typography.Text>
+                  </Space>
+                }
+              />
             ) : null}
             {notice ? <Alert type="success" showIcon message={notice} /> : null}
             {error ? <Alert type="error" showIcon message={error} /> : null}
@@ -562,6 +658,18 @@ export function KnowledgeBasePage() {
             </Flex>
           }
         >
+          <div className="library-filters" aria-label="论文列表筛选">
+            {LIBRARY_FILTERS.map((filter) => (
+              <Button
+                key={filter.label}
+                type={libraryState === filter.value ? 'primary' : 'default'}
+                aria-pressed={libraryState === filter.value}
+                onClick={() => changeLibraryState(filter.value)}
+              >
+                {filter.label}
+              </Button>
+            ))}
+          </div>
           {loading ? (
             <div className="center-state">
               <Spin />
@@ -570,7 +678,11 @@ export function KnowledgeBasePage() {
           ) : files.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="还没有登记原件；可上传 PDF 或扫描 originals 目录"
+              description={
+                libraryState === null
+                  ? '还没有登记原件；可上传 PDF 或扫描 originals 目录'
+                  : '当前筛选条件下没有论文原件'
+              }
             />
           ) : (
             <>

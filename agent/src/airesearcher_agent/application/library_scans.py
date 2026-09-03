@@ -56,6 +56,7 @@ class LibraryScanService:
                 )
                 return LibraryInfoView(
                     root_path=str(self._settings.paper_library_dir),
+                    originals_path=str(self._settings.paper_library_originals_dir),
                     supported_extensions=(".pdf",),
                     scan_in_progress=bool(active),
                     latest_scan=self._scan_view(latest) if latest is not None else None,

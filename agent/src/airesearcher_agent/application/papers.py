@@ -1,5 +1,4 @@
 from pathlib import Path
-from uuid import uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -224,60 +223,74 @@ class PaperService:
             raise self._database_unavailable() from error
 
     def delete_paper(self, paper_id: str) -> DeletePaperView:
-        tombstone: Path | None = None
-        source_path: Path | None = None
+        now = utc_now()
         try:
-            with self._database.session() as session:
-                paper = session.get(PaperRecord, paper_id)
+            with self._database.transaction() as session:
+                paper = session.get(PaperRecord, paper_id, with_for_update=True)
                 if paper is None:
                     raise self._paper_not_found()
-                running_job = session.scalar(
-                    select(IngestionJobRecord).where(
+                active_job = session.scalar(
+                    select(IngestionJobRecord)
+                    .where(
                         IngestionJobRecord.paper_id == paper.id,
-                        IngestionJobRecord.status == IngestionJobStatus.RUNNING.value,
+                        IngestionJobRecord.status.in_(
+                            (
+                                IngestionJobStatus.QUEUED.value,
+                                IngestionJobStatus.RUNNING.value,
+                            )
+                        ),
                     )
+                    .with_for_update()
                 )
-                if running_job is not None:
-                    raise AgentError(
-                        status_code=409,
-                        code="PAPER_BUSY",
-                        message="论文正在入库，请稍后再删除。",
-                        retryable=True,
-                    )
-                source_path = Path(paper.storage_path).resolve()
+                if active_job is not None:
+                    raise self._paper_busy()
+                paper.status = PaperStatus.EXCLUDED.value
+                paper.updated_at = now
+
             try:
                 self._vector_store.delete_paper(paper_id)
             except Exception as error:
                 raise AgentError(
                     status_code=503,
                     code="QDRANT_UNAVAILABLE",
-                    message="向量服务暂时不可用，论文尚未删除。",
+                    message="向量服务暂时不可用；论文已停止检索，但清理尚未完成。",
                     retryable=True,
                 ) from error
 
-            originals_root = self._settings.paper_library_originals_dir.resolve()
-            preserves_original = source_path.is_relative_to(originals_root)
-            if source_path.is_file() and not preserves_original:
-                tombstone = source_path.with_name(f".{source_path.name}.{uuid4().hex}.deleting")
-                source_path.replace(tombstone)
-            try:
-                with self._database.transaction() as session:
-                    paper = session.get(PaperRecord, paper_id, with_for_update=True)
-                    if paper is None:
-                        raise self._paper_not_found()
-                    session.execute(delete(ChunkRecord).where(ChunkRecord.paper_id == paper_id))
-                    session.delete(paper)
-            except BaseException:
-                if tombstone is not None and tombstone.exists() and source_path is not None:
-                    tombstone.replace(source_path)
-                raise
-            if tombstone is not None:
-                tombstone.unlink(missing_ok=True)
+            with self._database.transaction() as session:
+                paper = session.get(PaperRecord, paper_id, with_for_update=True)
+                if paper is None:
+                    raise self._paper_not_found()
+                sources = session.scalars(
+                    select(LibraryFileRecord)
+                    .where(LibraryFileRecord.paper_id == paper_id)
+                    .with_for_update()
+                ).all()
+                for source in sources:
+                    if source.source_status == "AVAILABLE":
+                        source.paper_id = None
+                        source.updated_at = now
+                    else:
+                        session.delete(source)
+                session.execute(delete(ChunkRecord).where(ChunkRecord.paper_id == paper_id))
+                session.execute(
+                    delete(IngestionJobRecord).where(IngestionJobRecord.paper_id == paper_id)
+                )
+                session.delete(paper)
             return DeletePaperView(paper_id=paper_id)
         except AgentError:
             raise
         except SQLAlchemyError as error:
             raise self._database_unavailable() from error
+
+    @staticmethod
+    def _paper_busy() -> AgentError:
+        return AgentError(
+            status_code=409,
+            code="PAPER_BUSY",
+            message="论文正在入库，请稍后再删除。",
+            retryable=True,
+        )
 
     def _paper_not_found(self) -> AgentError:
         return AgentError(

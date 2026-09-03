@@ -1,8 +1,8 @@
 # Agent API contract
 
 `agent-openapi-v1.yaml` 是 Python Agent 由 Java BFF 消费的已接受契约。阶段 1.4 的本地
-原件库基线已接入；新增 `libraryState`、`originalsPath`、知识删除和上传 MIME 语义已经
-接受，但 Agent 与 Java 消费者仍待后续阶段实现。
+原件库基线已接入；`libraryState`、`originalsPath`、知识删除和上传 MIME 语义已经由
+Agent 与 Java 消费，并通过模块测试及合成 PDF 全栈验收。
 
 ```text
 GET    /agent-api/v1/library

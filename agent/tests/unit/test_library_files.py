@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from airesearcher_agent.application.library_files import LibraryFileService
 from airesearcher_agent.domain.library import (
     LibraryFileKnowledgeStatus,
     LibraryFileSourceStatus,
+    LibraryStateFilter,
 )
+from airesearcher_agent.domain.papers import IngestionJobStatus, IngestionStage, PaperStatus
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import (
     IngestionJobRecord,
@@ -27,6 +30,89 @@ def _counts(service_database: Database) -> tuple[int, int, int]:
             int(session.scalar(select(func.count()).select_from(PaperRecord)) or 0),
             int(session.scalar(select(func.count()).select_from(IngestionJobRecord)) or 0),
         )
+
+
+def _add_state_record(
+    database: Database,
+    *,
+    key: str,
+    source_status: LibraryFileSourceStatus,
+    paper_status: PaperStatus | None,
+) -> str:
+    now = utc_now()
+    sha256 = hashlib.sha256(key.encode()).hexdigest()
+    relative_path = f"states/{key}.pdf"
+    paper_id = f"paper-{key}" if paper_status is not None else None
+    with database.transaction() as session:
+        if paper_status is not None:
+            if paper_status is PaperStatus.PROCESSING:
+                job_status = IngestionJobStatus.QUEUED
+                job_stage = IngestionStage.QUEUED
+            elif paper_status is PaperStatus.FAILED:
+                job_status = IngestionJobStatus.FAILED
+                job_stage = IngestionStage.FAILED
+            else:
+                job_status = IngestionJobStatus.SUCCEEDED
+                job_stage = IngestionStage.COMPLETED
+            session.add(
+                PaperRecord(
+                    id=paper_id,
+                    sha256=sha256,
+                    title=key,
+                    authors=[],
+                    publication_year=None,
+                    original_filename=f"{key}.pdf",
+                    storage_path=f"synthetic/{key}.pdf",
+                    file_size_bytes=32,
+                    page_count=1,
+                    status=paper_status.value,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.flush()
+            session.add(
+                IngestionJobRecord(
+                    id=f"job-{key}",
+                    paper_id=paper_id,
+                    active_key=(paper_id if job_status is IngestionJobStatus.QUEUED else None),
+                    status=job_status.value,
+                    stage=job_stage.value,
+                    attempt=1,
+                    max_attempts=3,
+                    failure_code=(
+                        "SYNTHETIC_FAILURE" if job_status is IngestionJobStatus.FAILED else None
+                    ),
+                    failure_message=(
+                        "Synthetic failure." if job_status is IngestionJobStatus.FAILED else None
+                    ),
+                    failure_retryable=job_status is IngestionJobStatus.FAILED,
+                    available_at=now,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    updated_at=now,
+                    started_at=now,
+                    completed_at=(now if job_status is not IngestionJobStatus.QUEUED else None),
+                )
+            )
+        record_id = f"library-file-{key}"
+        session.add(
+            LibraryFileRecord(
+                id=record_id,
+                relative_path=relative_path,
+                path_key=hashlib.sha256(relative_path.encode()).hexdigest(),
+                file_name=f"{key}.pdf",
+                file_size_bytes=32,
+                sha256=sha256,
+                source_status=source_status.value,
+                paper_id=paper_id,
+                discovered_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+    return record_id
 
 
 def test_upload_registers_original_without_creating_ingestion(tmp_path: Path) -> None:
@@ -48,6 +134,119 @@ def test_upload_registers_original_without_creating_ingestion(tmp_path: Path) ->
     stored_path = settings.paper_library_originals_dir / "uploads" / "new-paper.pdf"
     assert stored_path.read_bytes() == content
     assert list(settings.paper_library_staging_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("content_type", ["application/pdf", "application/octet-stream", None, ""])
+def test_upload_accepts_contract_pdf_content_types(
+    tmp_path: Path,
+    content_type: str | None,
+) -> None:
+    settings = runtime_settings(tmp_path)
+    service = LibraryFileService(database=sqlite_database(), settings=settings)
+
+    result = asyncio.run(
+        service.upload(
+            MemoryUpload(
+                b"%PDF-1.7\naccepted-content-type",
+                filename="accepted.pdf",
+                content_type=content_type,
+            )
+        )
+    )
+
+    assert result.library_file.relative_path == "uploads/accepted.pdf"
+    assert (settings.paper_library_originals_dir / "uploads" / "accepted.pdf").is_file()
+
+
+def test_library_state_filters_share_predicate_with_total_and_pagination(
+    tmp_path: Path,
+) -> None:
+    database = sqlite_database()
+    service = LibraryFileService(database=database, settings=runtime_settings(tmp_path))
+    expected = {
+        "not_ingested": {
+            _add_state_record(
+                database,
+                key="plain",
+                source_status=LibraryFileSourceStatus.AVAILABLE,
+                paper_status=None,
+            ),
+            _add_state_record(
+                database,
+                key="processing",
+                source_status=LibraryFileSourceStatus.AVAILABLE,
+                paper_status=PaperStatus.PROCESSING,
+            ),
+            _add_state_record(
+                database,
+                key="failed",
+                source_status=LibraryFileSourceStatus.AVAILABLE,
+                paper_status=PaperStatus.FAILED,
+            ),
+            _add_state_record(
+                database,
+                key="excluded",
+                source_status=LibraryFileSourceStatus.AVAILABLE,
+                paper_status=PaperStatus.EXCLUDED,
+            ),
+        },
+        "ingested": {
+            _add_state_record(
+                database,
+                key="ready",
+                source_status=LibraryFileSourceStatus.AVAILABLE,
+                paper_status=PaperStatus.READY,
+            )
+        },
+        "original_missing": {
+            _add_state_record(
+                database,
+                key="missing",
+                source_status=LibraryFileSourceStatus.MISSING,
+                paper_status=PaperStatus.READY,
+            ),
+            _add_state_record(
+                database,
+                key="replaced",
+                source_status=LibraryFileSourceStatus.REPLACED,
+                paper_status=PaperStatus.READY,
+            ),
+        },
+    }
+
+    first_not_ingested = service.list_files(
+        offset=0,
+        limit=2,
+        library_state=LibraryStateFilter.NOT_INGESTED,
+    )
+    second_not_ingested = service.list_files(
+        offset=2,
+        limit=2,
+        library_state=LibraryStateFilter.NOT_INGESTED,
+    )
+    ingested = service.list_files(
+        offset=0,
+        limit=100,
+        library_state=LibraryStateFilter.INGESTED,
+    )
+    original_missing = service.list_files(
+        offset=0,
+        limit=100,
+        library_state=LibraryStateFilter.ORIGINAL_MISSING,
+    )
+    all_files = service.list_files(offset=0, limit=100)
+
+    assert first_not_ingested.total == second_not_ingested.total == 4
+    assert len(first_not_ingested.items) == len(second_not_ingested.items) == 2
+    assert {
+        item.library_file_id for item in first_not_ingested.items + second_not_ingested.items
+    } == expected["not_ingested"]
+    assert ingested.total == 1
+    assert {item.library_file_id for item in ingested.items} == expected["ingested"]
+    assert original_missing.total == 2
+    assert {item.library_file_id for item in original_missing.items} == expected["original_missing"]
+    assert all_files.total == 7
+    assert {item.library_file_id for item in all_files.items} == set().union(*expected.values())
 
 
 def test_duplicate_content_is_not_stored_twice_and_list_is_paginated(tmp_path: Path) -> None:

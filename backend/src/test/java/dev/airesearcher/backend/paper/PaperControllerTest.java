@@ -9,6 +9,9 @@ import dev.airesearcher.backend.integration.agent.AgentPaperClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
@@ -24,10 +27,12 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -106,6 +111,61 @@ class PaperControllerTest {
                 .andExpect(jsonPath("$.data").doesNotExist());
 
         verify(paperClient, never()).upload(any(), any());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {
+            MediaType.APPLICATION_PDF_VALUE,
+            MediaType.APPLICATION_OCTET_STREAM_VALUE
+    })
+    void compatibilityUploadAcceptsContractPdfContentTypes(String contentType) throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "paper.pdf",
+                contentType,
+                "%PDF-test".getBytes()
+        );
+
+        mockMvc.perform(multipart("/api/v1/papers")
+                        .file(file)
+                        .header("X-Request-Id", "req-upload-content-type"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Request-Id", "req-upload-content-type"));
+
+        verify(paperClient).upload(any(), eq("req-upload-content-type"));
+    }
+
+    @Test
+    void wrapsKnowledgeDeletionAndPreservesRequestId() throws Exception {
+        when(paperClient.delete("paper-001", "req-delete-paper"))
+                .thenReturn(new DeletePaperData("paper-001", true));
+
+        mockMvc.perform(delete("/api/v1/papers/paper-001")
+                        .header("X-Request-Id", "req-delete-paper"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Request-Id", "req-delete-paper"))
+                .andExpect(jsonPath("$.code").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.paperId").value("paper-001"))
+                .andExpect(jsonPath("$.data.deleted").value(true))
+                .andExpect(jsonPath("$.requestId").value("req-delete-paper"));
+    }
+
+    @Test
+    void preservesPaperBusyStatusAndCode() throws Exception {
+        when(paperClient.delete("paper-001", "req-delete-busy")).thenThrow(new ApiException(
+                HttpStatus.CONFLICT,
+                "PAPER_BUSY",
+                "论文正在入库，请稍后再操作。",
+                true
+        ));
+
+        mockMvc.perform(delete("/api/v1/papers/paper-001")
+                        .header("X-Request-Id", "req-delete-busy"))
+                .andExpect(status().isConflict())
+                .andExpect(header().string("X-Request-Id", "req-delete-busy"))
+                .andExpect(jsonPath("$.code").value("PAPER_BUSY"))
+                .andExpect(jsonPath("$.requestId").value("req-delete-busy"));
     }
 
     @Test

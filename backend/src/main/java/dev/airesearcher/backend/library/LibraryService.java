@@ -22,8 +22,13 @@ public class LibraryService {
         return libraryClient.getLibrary(requestId);
     }
 
-    public LibraryFilesPage listFiles(int offset, int limit, String requestId) {
-        return libraryClient.listFiles(offset, limit, requestId);
+    public LibraryFilesPage listFiles(
+            int offset,
+            int limit,
+            LibraryStateFilter libraryState,
+            String requestId
+    ) {
+        return libraryClient.listFiles(offset, limit, libraryState, requestId);
     }
 
     public LibraryFileUploadData upload(MultipartFile file, String requestId) {

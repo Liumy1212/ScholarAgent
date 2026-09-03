@@ -102,6 +102,10 @@ export type LibraryFileKnowledgeStatus =
   | 'READY'
   | 'FAILED'
   | 'EXCLUDED';
+export type LibraryStateFilter =
+  | 'ORIGINAL_MISSING'
+  | 'NOT_INGESTED'
+  | 'INGESTED';
 export type LibraryScanStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 export type LibraryScanItemOutcome =
   | 'REGISTERED'
@@ -213,6 +217,7 @@ export interface LibraryScan {
 
 export interface LibraryInfo {
   rootPath: string;
+  originalsPath: string;
   supportedExtensions: string[];
   scanInProgress: boolean;
   latestScan: LibraryScan | null;

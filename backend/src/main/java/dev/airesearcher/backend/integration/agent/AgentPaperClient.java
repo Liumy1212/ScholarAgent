@@ -64,11 +64,15 @@ public class AgentPaperClient {
     }
 
     public DeletePaperData delete(String paperId, String requestId) {
-        return await(webClient.delete()
+        DeletePaperData deleted = await(webClient.delete()
                 .uri("/agent-api/v1/papers/{paperId}", paperId)
                 .header(RequestIds.HEADER_NAME, requestId)
                 .accept(MediaType.APPLICATION_JSON)
                 .exchangeToMono(response -> decode(response, DeletePaperData.class)));
+        if (!paperId.equals(deleted.paperId())) {
+            throw protocolError();
+        }
+        return deleted;
     }
 
     public IngestionJob getJob(String jobId, String requestId) {

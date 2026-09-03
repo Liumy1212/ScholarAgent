@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { excludePaper, libraryFileUrl, restorePaper } from './library';
+import {
+  excludePaper,
+  libraryFileUrl,
+  listLibraryFiles,
+  restorePaper,
+} from './library';
 
 function paperResult(init?: RequestInit): Response {
   const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -66,6 +71,38 @@ describe('library API', () => {
     );
     expect(libraryFileUrl('library/file 001', 3)).toBe(
       '/api/v1/library/files/library%2Ffile%20001/file#page=3',
+    );
+  });
+
+  it('仅在选择筛选项时发送 libraryState', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+        return new Response(
+          JSON.stringify({
+            code: 'SUCCESS',
+            message: 'Success.',
+            requestId,
+            data: { items: [], total: 0, offset: 0, limit: 25 },
+          }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Request-Id': requestId,
+            },
+          },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listLibraryFiles(0, 25);
+    await listLibraryFiles(0, 25, 'ORIGINAL_MISSING');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/library/files?offset=0&limit=25');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      '/api/v1/library/files?offset=0&limit=25&libraryState=ORIGINAL_MISSING',
     );
   });
 });

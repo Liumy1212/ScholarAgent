@@ -6,9 +6,10 @@ from threading import Lock
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from airesearcher_agent.application.errors import AgentError, ErrorDetail
 from airesearcher_agent.config import Settings
@@ -18,6 +19,7 @@ from airesearcher_agent.domain.library import (
     LibraryFilesPageView,
     LibraryFileUploadView,
     LibraryFileView,
+    LibraryStateFilter,
     StoredLibraryFile,
 )
 from airesearcher_agent.domain.papers import PaperStatus
@@ -50,12 +52,20 @@ class LibraryFileService:
 
     async def upload(self, upload: AsyncUpload) -> LibraryFileUploadView:
         file_name = self._validated_file_name(upload.filename)
-        if upload.content_type != "application/pdf":
+        if upload.content_type not in {None, "", "application/pdf", "application/octet-stream"}:
             raise AgentError(
                 status_code=415,
                 code="UNSUPPORTED_MEDIA_TYPE",
-                message="只支持 application/pdf 文本型 PDF。",
-                details=(ErrorDetail(field="file", reason="content type must be application/pdf"),),
+                message="只支持 PDF 文件。",
+                details=(
+                    ErrorDetail(
+                        field="file",
+                        reason=(
+                            "content type must be application/pdf, "
+                            "application/octet-stream, or omitted"
+                        ),
+                    ),
+                ),
             )
 
         self._ensure_safe_directories()
@@ -110,14 +120,29 @@ class LibraryFileService:
         finally:
             staging_path.unlink(missing_ok=True)
 
-    def list_files(self, *, offset: int, limit: int) -> LibraryFilesPageView:
+    def list_files(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        library_state: LibraryStateFilter | None = None,
+    ) -> LibraryFilesPageView:
+        conditions = self._library_state_conditions(library_state)
         try:
             with self._database.session() as session:
                 total = int(
-                    session.scalar(select(func.count()).select_from(LibraryFileRecord)) or 0
+                    session.scalar(
+                        select(func.count())
+                        .select_from(LibraryFileRecord)
+                        .outerjoin(PaperRecord, PaperRecord.id == LibraryFileRecord.paper_id)
+                        .where(*conditions)
+                    )
+                    or 0
                 )
                 records = session.scalars(
                     select(LibraryFileRecord)
+                    .outerjoin(PaperRecord, PaperRecord.id == LibraryFileRecord.paper_id)
+                    .where(*conditions)
                     .order_by(
                         LibraryFileRecord.discovered_at.desc(),
                         LibraryFileRecord.id.desc(),
@@ -129,6 +154,32 @@ class LibraryFileService:
             return LibraryFilesPageView(items=items, total=total, offset=offset, limit=limit)
         except SQLAlchemyError as error:
             raise self._database_unavailable() from error
+
+    @staticmethod
+    def _library_state_conditions(
+        library_state: LibraryStateFilter | None,
+    ) -> tuple[ColumnElement[bool], ...]:
+        if library_state is LibraryStateFilter.ORIGINAL_MISSING:
+            return (
+                PaperRecord.id.is_not(None),
+                LibraryFileRecord.source_status.in_(
+                    (
+                        LibraryFileSourceStatus.MISSING.value,
+                        LibraryFileSourceStatus.REPLACED.value,
+                    )
+                ),
+            )
+        if library_state is LibraryStateFilter.NOT_INGESTED:
+            return (
+                LibraryFileRecord.source_status == LibraryFileSourceStatus.AVAILABLE.value,
+                or_(PaperRecord.id.is_(None), PaperRecord.status != PaperStatus.READY.value),
+            )
+        if library_state is LibraryStateFilter.INGESTED:
+            return (
+                LibraryFileRecord.source_status == LibraryFileSourceStatus.AVAILABLE.value,
+                PaperRecord.status == PaperStatus.READY.value,
+            )
+        return ()
 
     def get_file(self, library_file_id: str) -> StoredLibraryFile:
         try:

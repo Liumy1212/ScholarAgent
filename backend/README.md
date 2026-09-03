@@ -3,9 +3,10 @@
 AIResearcher 的 Java Web Backend/BFF。React 只通过本应用访问 Python Agent；本模块没有论文
 数据库、PDF 解析、RAG、Prompt 或模型逻辑。
 
-当前实现代理原件库信息、分页清单、只登记上传、手动入库、扫描、扫描项、排除/恢复、
-PDF Range 和流式问答，并暂时保留旧单篇论文接口。React 是否已消费这些接口以
-[路线图阶段 1.4](../docs/roadmap.md)为准。
+当前实现代理原件库信息、服务端状态筛选、只登记上传、手动入库、扫描、扫描项、知识删除、
+排除/恢复、PDF Range 和流式问答，并暂时保留旧单篇论文接口。`originalsPath` 直接透传
+Agent 的实际扫描目录；知识删除只代理 Agent，不在 Java 删除 PDF、数据库记录或向量。
+React 是否已消费这些接口以[路线图阶段 1.4](../docs/roadmap.md)为准。
 
 ## 目录结构
 

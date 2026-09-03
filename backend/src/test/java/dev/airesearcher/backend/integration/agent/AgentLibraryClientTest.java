@@ -2,6 +2,7 @@ package dev.airesearcher.backend.integration.agent;
 
 import dev.airesearcher.backend.common.error.ApiException;
 import dev.airesearcher.backend.library.LibraryScanItemOutcome;
+import dev.airesearcher.backend.library.LibraryStateFilter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -62,7 +63,7 @@ class AgentLibraryClientTest {
                 })
                 .bindNow();
 
-        var page = client().listFiles(20, 10, "req-library-list");
+        var page = client().listFiles(20, 10, null, "req-library-list");
 
         assertThat(uri).hasValue("/agent-api/v1/library/files?offset=20&limit=10");
         assertThat(requestId).hasValue("req-library-list");
@@ -76,26 +77,97 @@ class AgentLibraryClientTest {
     }
 
     @Test
+    void forwardsLibraryStateWithoutRecomputingThePage() {
+        AtomicReference<String> uri = new AtomicReference<>();
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> {
+                    uri.set(request.uri());
+                    return response.status(200)
+                            .header("Content-Type", "application/json")
+                            .sendString(Mono.just("{\"items\":[],\"total\":7,\"offset\":0,\"limit\":25}"))
+                            .then();
+                })
+                .bindNow();
+
+        var page = client().listFiles(
+                0,
+                25,
+                LibraryStateFilter.ORIGINAL_MISSING,
+                "req-filtered-library-list"
+        );
+
+        assertThat(uri).hasValue(
+                "/agent-api/v1/library/files?offset=0&limit=25&libraryState=ORIGINAL_MISSING"
+        );
+        assertThat(page.total()).isEqualTo(7);
+    }
+
+    @Test
+    void decodesOriginalsPathFromLibraryInfo() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(200)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("""
+                                {"rootPath":"D:/papers","originalsPath":"D:/papers/originals","supportedExtensions":[".pdf"],"scanInProgress":false,"latestScan":null}
+                                """))
+                        .then())
+                .bindNow();
+
+        var info = client().getLibrary("req-library-info");
+
+        assertThat(info.rootPath()).isEqualTo("D:/papers");
+        assertThat(info.originalsPath()).isEqualTo("D:/papers/originals");
+    }
+
+    @Test
+    void rejectsLibraryInfoWithoutOriginalsPathAsProtocolError() {
+        server = HttpServer.create()
+                .host("127.0.0.1")
+                .port(0)
+                .handle((request, response) -> response.status(200)
+                        .header("Content-Type", "application/json")
+                        .sendString(Mono.just("""
+                                {"rootPath":"D:/papers","supportedExtensions":[".pdf"],"scanInProgress":false,"latestScan":null}
+                                """))
+                        .then())
+                .bindNow();
+
+        assertThatThrownBy(() -> client().getLibrary("req-library-info"))
+                .isInstanceOfSatisfying(ApiException.class, exception -> {
+                    assertThat(exception.status().value()).isEqualTo(502);
+                    assertThat(exception.code()).isEqualTo("AGENT_ERROR");
+                });
+    }
+
+    @Test
     void uploadsOnlyToTheLibraryFileEndpoint() {
         AtomicReference<String> requestLine = new AtomicReference<>();
         AtomicReference<String> contentType = new AtomicReference<>();
+        AtomicReference<String> body = new AtomicReference<>();
         server = HttpServer.create()
                 .host("127.0.0.1")
                 .port(0)
                 .handle((request, response) -> {
                     requestLine.set(request.method().name() + " " + request.uri());
                     contentType.set(request.requestHeaders().get("Content-Type"));
-                    return request.receive().then(response.status(200)
-                            .header("Content-Type", "application/json")
-                            .sendString(Mono.just("{\"libraryFile\":" + LIBRARY_FILE_JSON
-                                    + ",\"duplicate\":false}"))
-                            .then());
+                    return request.receive().aggregate().asString().flatMap(received -> {
+                        body.set(received);
+                        return response.status(200)
+                                .header("Content-Type", "application/json")
+                                .sendString(Mono.just("{\"libraryFile\":" + LIBRARY_FILE_JSON
+                                        + ",\"duplicate\":false}"))
+                                .then();
+                    });
                 })
                 .bindNow();
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "paper.pdf",
-                MediaType.APPLICATION_PDF_VALUE,
+                MediaType.APPLICATION_OCTET_STREAM_VALUE,
                 "%PDF-test".getBytes()
         );
 
@@ -103,6 +175,7 @@ class AgentLibraryClientTest {
 
         assertThat(requestLine).hasValue("POST /agent-api/v1/library/files");
         assertThat(contentType.get()).startsWith("multipart/form-data");
+        assertThat(body.get()).contains("Content-Type: application/pdf");
         assertThat(uploaded.duplicate()).isFalse();
         assertThat(uploaded.libraryFile().knowledgeStatus()).isEqualTo("NOT_INGESTED");
     }

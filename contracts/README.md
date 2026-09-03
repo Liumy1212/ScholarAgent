@@ -7,8 +7,8 @@ AIResearcher 的 Agent API、浏览器 Web API 和 SSE 共享机器可读契约�
 全栈冒烟。完成状态与后续范围以[路线图阶段 1.4](../docs/roadmap.md)为准。
 
 论文原件库日常操作修复的契约已经接受：`libraryState` 服务端筛选、`originalsPath`、
-`DELETE /papers/{paperId}` 知识删除和宽松上传 MIME 均已冻结。Python Agent、Java BFF 与
-React 对这些新增语义的消费仍待后续阶段实现；兼容性 exclusion/restore 接口继续保留。
+`DELETE /papers/{paperId}` 知识删除和宽松上传 MIME 均已冻结，Python Agent、Java BFF 与
+React 已完成消费，并通过模块测试及合成 PDF 全栈验收。兼容性 exclusion/restore 接口继续保留。
 
 ## 目录结构
 
