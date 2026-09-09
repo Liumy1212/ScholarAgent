@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +15,12 @@ from airesearcher_agent.domain.papers import (
     IngestionStage,
     PaperStatus,
     ParsedChunk,
+)
+from airesearcher_agent.ingestion.context import (
+    ChunkContextError,
+    ChunkContextProvider,
+    ChunkContextRequest,
+    retrieval_text,
 )
 from airesearcher_agent.ingestion.pdf import ParsedDocument, PdfParser
 from airesearcher_agent.persistence.database import Database
@@ -56,6 +62,7 @@ class IngestionWorker:
         *,
         database: Database,
         parser: PdfParser,
+        context_provider: ChunkContextProvider,
         embedding: EmbeddingProvider,
         vector_store: VectorStore,
         settings: Settings,
@@ -63,6 +70,7 @@ class IngestionWorker:
     ) -> None:
         self._database = database
         self._parser = parser
+        self._context_provider = context_provider
         self._embedding = embedding
         self._vector_store = vector_store
         self._library_files = LibraryFileService(database=database, settings=settings)
@@ -156,6 +164,8 @@ class IngestionWorker:
             parsed = self._parser.parse(paper_id=claimed.paper_id, path=source.path)
             self._verify_source(source)
             self._set_stage(claimed, IngestionStage.CHUNKING)
+            parsed = self._contextualize(claimed, parsed)
+            self._verify_source(source)
             self._store_chunks(claimed, parsed)
             self._set_stage(claimed, IngestionStage.EMBEDDING)
             vectors = self._embedding.encode([chunk.text for chunk in parsed.chunks])
@@ -306,6 +316,46 @@ class IngestionWorker:
             paper.updated_at = now
             self._renew(job, now)
 
+    def _contextualize(self, claimed: ClaimedJob, parsed: ParsedDocument) -> ParsedDocument:
+        paper_title = parsed.title or self._paper_title(claimed.paper_id)
+        contextualized: list[ParsedChunk] = []
+        try:
+            for index, chunk in enumerate(parsed.chunks):
+                previous = parsed.chunks[index - 1].quote if index > 0 else None
+                following = (
+                    parsed.chunks[index + 1].quote if index + 1 < len(parsed.chunks) else None
+                )
+                context_text = self._context_provider.generate(
+                    ChunkContextRequest(
+                        paper_title=paper_title,
+                        section_path=chunk.section_path,
+                        section_outline=parsed.section_outline,
+                        previous_text=previous,
+                        current_text=chunk.quote,
+                        next_text=following,
+                    )
+                )
+                self._set_stage(claimed, IngestionStage.CHUNKING)
+                contextualized.append(
+                    replace(
+                        chunk,
+                        text=retrieval_text(
+                            paper_title=paper_title,
+                            section_path=chunk.section_path,
+                            context_text=context_text,
+                            quote=chunk.quote,
+                        ),
+                        context_text=context_text,
+                    )
+                )
+        except ChunkContextError as error:
+            raise IngestionError(
+                code="CONTEXTUALIZATION_FAILED",
+                message="论文上下文生成失败，入库可以重试。",
+                retryable=True,
+            ) from error
+        return replace(parsed, chunks=tuple(contextualized))
+
     def _chunk_record(self, chunk: ParsedChunk, now: datetime) -> ChunkRecord:
         return ChunkRecord(
             id=chunk.chunk_id,
@@ -315,6 +365,8 @@ class IngestionWorker:
             ordinal=chunk.ordinal,
             text=chunk.text,
             quote=chunk.quote,
+            section_path=" > ".join(chunk.section_path),
+            context_text=chunk.context_text,
             created_at=now,
         )
 

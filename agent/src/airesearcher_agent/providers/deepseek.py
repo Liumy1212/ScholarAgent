@@ -62,7 +62,9 @@ def _tool_definitions() -> list[ToolDefinition]:
             "type": "function",
             "function": {
                 "name": "knowledge_base_search",
-                "description": "在 READY 论文中进行向量召回并用本地模型重排，返回可引用证据。",
+                "description": (
+                    "在 READY 论文中进行向量与 BM25 融合召回，再用本地模型重排并返回可引用证据。"
+                ),
                 "parameters": KnowledgeBaseSearchArgs.model_json_schema(by_alias=True),
             },
         },

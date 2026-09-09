@@ -5,6 +5,7 @@ import pytest
 from tests.support import (
     DeterministicEmbedding,
     FixedReranker,
+    RecordingKeywordRetriever,
     RecordingVectorStore,
     runtime_settings,
     sqlite_database,
@@ -114,6 +115,7 @@ def test_knowledge_search_scopes_to_ready_papers_and_reranks_page_evidence(
     tools = RetrievalTools(
         database=database,
         embedding=DeterministicEmbedding(),
+        keyword_retriever=RecordingKeywordRetriever(),
         reranker=reranker,
         vector_store=vectors,
         settings=runtime_settings(tmp_path),
@@ -156,6 +158,7 @@ def test_document_lookup_returns_matching_metadata_without_vector_search(tmp_pat
     tools = RetrievalTools(
         database=database,
         embedding=DeterministicEmbedding(),
+        keyword_retriever=RecordingKeywordRetriever(),
         reranker=FixedReranker([]),
         vector_store=vectors,
         settings=runtime_settings(tmp_path),
@@ -195,6 +198,7 @@ def test_residual_vectors_never_bypass_paper_and_original_status_filters(
     tools = RetrievalTools(
         database=database,
         embedding=DeterministicEmbedding(),
+        keyword_retriever=RecordingKeywordRetriever(),
         reranker=FixedReranker([1.0]),
         vector_store=vectors,
         settings=runtime_settings(tmp_path),
@@ -209,3 +213,97 @@ def test_residual_vectors_never_bypass_paper_and_original_status_filters(
     assert evidence == []
     assert matches == []
     assert vectors.search_scopes == []
+
+
+def test_knowledge_search_fuses_dense_and_keyword_candidates_before_reranking(
+    tmp_path: Path,
+) -> None:
+    database = sqlite_database()
+    _seed_paper(
+        database,
+        paper_id="paper-hybrid",
+        title="Hybrid Retrieval",
+        status="READY",
+        chunks=[
+            ("chunk-dense", 1, "Semantic dense match."),
+            ("chunk-both", 1, "Shared candidate."),
+            ("chunk-keyword", 2, "Exact BM25 terminology."),
+        ],
+    )
+    vectors = RecordingVectorStore()
+    vectors.search_hits = [
+        SearchHit(chunk_id="chunk-dense", score=0.99),
+        SearchHit(chunk_id="chunk-both", score=0.80),
+    ]
+    keywords = RecordingKeywordRetriever(
+        [
+            SearchHit(chunk_id="chunk-keyword", score=8.0),
+            SearchHit(chunk_id="chunk-both", score=4.0),
+        ]
+    )
+    reranker = FixedReranker([0.7, 0.9, 0.2])
+    tools = RetrievalTools(
+        database=database,
+        embedding=DeterministicEmbedding(),
+        keyword_retriever=keywords,
+        reranker=reranker,
+        vector_store=vectors,
+        settings=runtime_settings(tmp_path),
+    )
+
+    evidence = tools.knowledge_base_search(
+        KnowledgeBaseSearchArgs.model_validate(
+            {"query": "BM25 terminology", "paperIds": ["paper-hybrid"], "topK": 3}
+        ),
+        citation_namespace="hybrid-run",
+    )
+
+    assert [document.chunk_id for document in keywords.calls[0][1]] == [
+        "chunk-dense",
+        "chunk-both",
+        "chunk-keyword",
+    ]
+    assert reranker.calls[0][1] == [
+        "Shared candidate.",
+        "Semantic dense match.",
+        "Exact BM25 terminology.",
+    ]
+    assert [item.chunk_id for item in evidence] == [
+        "chunk-dense",
+        "chunk-both",
+        "chunk-keyword",
+    ]
+
+
+def test_dense_ranking_baseline_does_not_use_keyword_candidates(tmp_path: Path) -> None:
+    database = sqlite_database()
+    _seed_paper(
+        database,
+        paper_id="paper-dense-baseline",
+        title="Dense Baseline",
+        status="READY",
+        chunks=[
+            ("chunk-dense-baseline", 1, "Semantic candidate."),
+            ("chunk-keyword-only", 2, "Exact keyword candidate."),
+        ],
+    )
+    vectors = RecordingVectorStore()
+    vectors.search_hits = [SearchHit(chunk_id="chunk-dense-baseline", score=0.8)]
+    keywords = RecordingKeywordRetriever([SearchHit(chunk_id="chunk-keyword-only", score=9.0)])
+    tools = RetrievalTools(
+        database=database,
+        embedding=DeterministicEmbedding(),
+        keyword_retriever=keywords,
+        reranker=FixedReranker([0.6]),
+        vector_store=vectors,
+        settings=runtime_settings(tmp_path),
+    )
+
+    ranked = tools.rank_chunks(
+        query="exact keyword",
+        paper_ids=("paper-dense-baseline",),
+        mode="dense",
+    )
+
+    assert [item.chunk_id for item in ranked] == ["chunk-dense-baseline"]
+    assert keywords.calls == []

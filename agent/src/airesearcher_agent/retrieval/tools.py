@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -10,11 +10,24 @@ from airesearcher_agent.domain.papers import PaperSourceStatus, PaperStatus
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import ChunkRecord, LibraryFileRecord, PaperRecord
 from airesearcher_agent.persistence.repositories import chunks_by_ids, ready_paper_ids
-from airesearcher_agent.retrieval.models import DocumentMatch, Evidence
-from airesearcher_agent.retrieval.ports import EmbeddingProvider, Reranker, VectorStore
+from airesearcher_agent.retrieval.models import (
+    DocumentMatch,
+    Evidence,
+    KeywordDocument,
+    RankedChunk,
+    SearchHit,
+)
+from airesearcher_agent.retrieval.ports import (
+    EmbeddingProvider,
+    KeywordRetriever,
+    Reranker,
+    VectorStore,
+)
 
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+RRF_K = 60
+RetrievalMode = Literal["dense", "hybrid"]
 
 
 class KnowledgeBaseSearchArgs(BaseModel):
@@ -44,12 +57,14 @@ class RetrievalTools:
         *,
         database: Database,
         embedding: EmbeddingProvider,
+        keyword_retriever: KeywordRetriever,
         reranker: Reranker,
         vector_store: VectorStore,
         settings: Settings,
     ) -> None:
         self._database = database
         self._embedding = embedding
+        self._keyword_retriever = keyword_retriever
         self._reranker = reranker
         self._vector_store = vector_store
         self._candidate_count = settings.retrieval_candidate_count
@@ -61,18 +76,67 @@ class RetrievalTools:
         *,
         citation_namespace: str,
     ) -> list[Evidence]:
-        requested = tuple(arguments.paper_ids or ())
+        ranked = self.rank_chunks(
+            query=arguments.query,
+            paper_ids=tuple(arguments.paper_ids or ()),
+            mode="hybrid",
+        )
+        top_k = arguments.top_k or self._default_top_k
+        evidence: list[Evidence] = []
+        for chunk in ranked[:top_k]:
+            citation_seed = f"{citation_namespace}:{chunk.chunk_id}"
+            citation_id = f"citation-{uuid5(NAMESPACE_URL, citation_seed).hex}"
+            evidence.append(
+                Evidence(
+                    citation_id=citation_id,
+                    paper_id=chunk.paper_id,
+                    title=chunk.title,
+                    page=chunk.page,
+                    quote=chunk.quote,
+                    chunk_id=chunk.chunk_id,
+                    retrieval_score=chunk.retrieval_score,
+                    rerank_score=chunk.rerank_score,
+                )
+            )
+        return evidence
+
+    def rank_chunks(
+        self,
+        *,
+        query: str,
+        paper_ids: tuple[str, ...],
+        mode: RetrievalMode,
+    ) -> list[RankedChunk]:
         with self._database.session() as session:
-            allowed_ids = ready_paper_ids(session, requested)
+            allowed_ids = ready_paper_ids(session, paper_ids)
+            keyword_chunks = session.scalars(
+                select(ChunkRecord)
+                .where(ChunkRecord.paper_id.in_(allowed_ids))
+                .order_by(ChunkRecord.paper_id, ChunkRecord.page, ChunkRecord.ordinal)
+            ).all()
         if not allowed_ids:
             return []
 
-        query_vector = self._embedding.encode([arguments.query])[0]
-        hits = self._vector_store.search(
+        query_vector = self._embedding.encode([query])[0]
+        dense_hits = self._vector_store.search(
             vector=query_vector,
             ready_paper_ids=allowed_ids,
             limit=self._candidate_count,
         )
+        allowed_chunk_ids = {chunk.id for chunk in keyword_chunks}
+        dense_hits = [hit for hit in dense_hits if hit.chunk_id in allowed_chunk_ids]
+        if mode == "hybrid":
+            keyword_hits = self._keyword_retriever.search(
+                query=query,
+                documents=[
+                    KeywordDocument(chunk_id=chunk.id, text=chunk.text) for chunk in keyword_chunks
+                ],
+                limit=self._candidate_count,
+            )
+            keyword_hits = [hit for hit in keyword_hits if hit.chunk_id in allowed_chunk_ids]
+            hits = self._rrf_fuse(dense_hits, keyword_hits)[: self._candidate_count]
+        else:
+            hits = dense_hits[: self._candidate_count]
         ordered_chunk_ids = tuple(hit.chunk_id for hit in hits)
         with self._database.session() as session:
             chunks = chunks_by_ids(session, ordered_chunk_ids)
@@ -94,7 +158,7 @@ class RetrievalTools:
             return []
 
         rerank_scores = self._reranker.score(
-            arguments.query,
+            query,
             [candidate[0].text for candidate in candidates],
         )
         if len(rerank_scores) != len(candidates):
@@ -104,23 +168,41 @@ class RetrievalTools:
             key=lambda item: item[1],
             reverse=True,
         )
-        top_k = arguments.top_k or self._default_top_k
-        evidence: list[Evidence] = []
-        for (chunk, paper, retrieval_score), rerank_score in ranked[:top_k]:
-            citation_id = f"citation-{uuid5(NAMESPACE_URL, f'{citation_namespace}:{chunk.id}').hex}"
-            evidence.append(
-                Evidence(
-                    citation_id=citation_id,
-                    paper_id=paper.id,
-                    title=paper.title,
-                    page=chunk.page,
-                    quote=chunk.quote,
-                    chunk_id=chunk.id,
-                    retrieval_score=retrieval_score,
-                    rerank_score=rerank_score,
-                )
+        return [
+            RankedChunk(
+                chunk_id=chunk.id,
+                paper_id=paper.id,
+                title=paper.title,
+                page=chunk.page,
+                quote=chunk.quote,
+                retrieval_score=retrieval_score,
+                rerank_score=rerank_score,
             )
-        return evidence
+            for (chunk, paper, retrieval_score), rerank_score in ranked
+        ]
+
+    @staticmethod
+    def _rrf_fuse(*rankings: list[SearchHit]) -> list[SearchHit]:
+        scores: dict[str, float] = {}
+        first_seen: dict[str, int] = {}
+        order = 0
+        for ranking in rankings:
+            seen_in_ranking: set[str] = set()
+            for rank, hit in enumerate(ranking, start=1):
+                if hit.chunk_id in seen_in_ranking:
+                    continue
+                seen_in_ranking.add(hit.chunk_id)
+                if hit.chunk_id not in first_seen:
+                    first_seen[hit.chunk_id] = order
+                    order += 1
+                scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+        return [
+            SearchHit(chunk_id=chunk_id, score=score)
+            for chunk_id, score in sorted(
+                scores.items(),
+                key=lambda item: (-item[1], first_seen[item[0]]),
+            )
+        ]
 
     def document_lookup(self, arguments: DocumentLookupArgs) -> list[DocumentMatch]:
         term = arguments.query.strip()

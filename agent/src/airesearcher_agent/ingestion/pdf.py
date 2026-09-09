@@ -1,6 +1,9 @@
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pymupdf
@@ -9,6 +12,44 @@ from airesearcher_agent.application.errors import IngestionError
 from airesearcher_agent.domain.papers import ParsedChunk
 
 YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}")
+NUMBERED_HEADING_PATTERN = re.compile(
+    r"^(?P<number>(?:\d+(?:\.\d+)*|[IVXLC]+(?:\.[A-Z])?))[\s.：:、-]+\S",
+    re.IGNORECASE,
+)
+KNOWN_HEADINGS = {
+    "abstract",
+    "acknowledgements",
+    "acknowledgments",
+    "conclusion",
+    "conclusions",
+    "discussion",
+    "experiments",
+    "introduction",
+    "limitations",
+    "methods",
+    "methodology",
+    "references",
+    "related work",
+    "results",
+    "摘要",
+    "引言",
+    "相关工作",
+    "方法",
+    "实验",
+    "结果",
+    "讨论",
+    "局限性",
+    "结论",
+    "参考文献",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class TextBlock:
+    page: int
+    text: str
+    max_font_size: float
+    bold: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +59,17 @@ class ParsedDocument:
     publication_year: int | None
     page_count: int
     chunks: tuple[ParsedChunk, ...]
+
+    @property
+    def section_outline(self) -> tuple[str, ...]:
+        seen: set[str] = set()
+        outline: list[str] = []
+        for chunk in self.chunks:
+            label = " > ".join(chunk.section_path)
+            if label and label not in seen:
+                seen.add(label)
+                outline.append(label)
+        return tuple(outline)
 
 
 class PdfParser:
@@ -57,30 +109,69 @@ class PdfParser:
                     retryable=False,
                 )
 
-            chunks: list[ParsedChunk] = []
+            page_blocks: list[tuple[int, tuple[TextBlock, ...]]] = []
+            all_font_sizes: list[float] = []
             total_text = 0
             for page_index in range(page_count):
-                raw_text = document[page_index].get_text(  # type: ignore[no-untyped-call]
-                    "text",
+                raw_page = document[page_index].get_text(  # type: ignore[no-untyped-call]
+                    "dict",
                     sort=True,
                 )
-                page_text = self._normalize_text(raw_text)
-                total_text += len(page_text)
-                for ordinal, chunk_text in enumerate(self._split_page(page_text)):
-                    seed = f"{paper_id}:{page_index + 1}:{ordinal}"
-                    chunk_id = f"chunk-{uuid5(NAMESPACE_URL, seed).hex}"
-                    vector_id = str(uuid5(NAMESPACE_URL, f"vector:{seed}"))
-                    chunks.append(
-                        ParsedChunk(
-                            chunk_id=chunk_id,
-                            vector_id=vector_id,
+                blocks = self._text_blocks(page_index + 1, raw_page)
+                page_blocks.append((page_index + 1, blocks))
+                total_text += sum(len(block.text) for block in blocks)
+                all_font_sizes.extend(
+                    block.max_font_size for block in blocks if block.max_font_size > 0
+                )
+
+            body_font_size = median(all_font_sizes) if all_font_sizes else 11.0
+            chunks: list[ParsedChunk] = []
+            section_stack: list[str] = []
+            for page, blocks in page_blocks:
+                ordinal = 0
+                section_texts: list[str] = []
+                active_path = tuple(section_stack)
+
+                for block in blocks:
+                    heading_level = self._heading_level(block, body_font_size)
+                    if heading_level is not None:
+                        ordinal = self._append_chunks(
+                            chunks,
                             paper_id=paper_id,
-                            page=page_index + 1,
+                            page=page,
                             ordinal=ordinal,
-                            text=chunk_text,
-                            quote=chunk_text,
+                            texts=section_texts,
+                            section_path=active_path,
                         )
-                    )
+                        section_texts = []
+                        section_stack = self._updated_section_stack(
+                            section_stack,
+                            heading_level,
+                            block.text,
+                        )
+                        active_path = tuple(section_stack)
+                        continue
+                    current_path = tuple(section_stack)
+                    if section_texts and current_path != active_path:
+                        ordinal = self._append_chunks(
+                            chunks,
+                            paper_id=paper_id,
+                            page=page,
+                            ordinal=ordinal,
+                            texts=section_texts,
+                            section_path=active_path,
+                        )
+                        section_texts = []
+                    active_path = current_path
+                    section_texts.append(block.text)
+                self._append_chunks(
+                    chunks,
+                    paper_id=paper_id,
+                    page=page,
+                    ordinal=ordinal,
+                    texts=section_texts,
+                    section_path=active_path,
+                )
             if total_text < 20 or not chunks:
                 raise IngestionError(
                     code="PDF_HAS_NO_TEXT",
@@ -104,6 +195,104 @@ class PdfParser:
     def _normalize_text(self, value: str) -> str:
         lines = [" ".join(line.replace("\x00", "").split()) for line in value.splitlines()]
         return "\n".join(line for line in lines if line).strip()
+
+    def _append_chunks(
+        self,
+        chunks: list[ParsedChunk],
+        *,
+        paper_id: str,
+        page: int,
+        ordinal: int,
+        texts: list[str],
+        section_path: tuple[str, ...],
+    ) -> int:
+        page_text = "\n".join(texts)
+        for chunk_text in self._split_page(page_text):
+            seed = f"{paper_id}:{page}:{ordinal}"
+            chunks.append(
+                ParsedChunk(
+                    chunk_id=f"chunk-{uuid5(NAMESPACE_URL, seed).hex}",
+                    vector_id=str(uuid5(NAMESPACE_URL, f"vector:{seed}")),
+                    paper_id=paper_id,
+                    page=page,
+                    ordinal=ordinal,
+                    text=chunk_text,
+                    quote=chunk_text,
+                    section_path=section_path,
+                )
+            )
+            ordinal += 1
+        return ordinal
+
+    def _text_blocks(self, page: int, raw_page: dict[str, Any]) -> tuple[TextBlock, ...]:
+        result: list[TextBlock] = []
+        raw_blocks = raw_page.get("blocks", [])
+        if not isinstance(raw_blocks, list):
+            return ()
+        for raw_block in raw_blocks:
+            if not isinstance(raw_block, dict) or raw_block.get("type") != 0:
+                continue
+            lines: list[str] = []
+            sizes: list[float] = []
+            bold = False
+            for raw_line in self._dict_items(raw_block.get("lines")):
+                line_parts: list[str] = []
+                for span in self._dict_items(raw_line.get("spans")):
+                    value = span.get("text")
+                    if isinstance(value, str) and value.strip():
+                        line_parts.append(value)
+                    size = span.get("size")
+                    if isinstance(size, int | float):
+                        sizes.append(float(size))
+                    font = span.get("font")
+                    flags = span.get("flags")
+                    bold = bold or (isinstance(font, str) and "bold" in font.lower())
+                    bold = bold or (isinstance(flags, int) and bool(flags & 16))
+                normalized_line = " ".join("".join(line_parts).split())
+                if normalized_line:
+                    lines.append(normalized_line)
+            text = self._normalize_text("\n".join(lines))
+            if text:
+                result.append(
+                    TextBlock(
+                        page=page,
+                        text=text,
+                        max_font_size=max(sizes, default=0.0),
+                        bold=bold,
+                    )
+                )
+        return tuple(result)
+
+    @staticmethod
+    def _dict_items(value: object) -> Iterable[dict[str, Any]]:
+        if not isinstance(value, list):
+            return ()
+        return (item for item in value if isinstance(item, dict))
+
+    def _heading_level(self, block: TextBlock, body_font_size: float) -> int | None:
+        text = " ".join(block.text.split()).strip()
+        if not text or len(text) > 180 or "\n" in block.text:
+            return None
+        normalized = text.casefold().rstrip(".:：")
+        match = NUMBERED_HEADING_PATTERN.match(text)
+        known = normalized in KNOWN_HEADINGS
+        visually_distinct = block.max_font_size >= body_font_size * 1.12 or block.bold
+        if not known and match is None:
+            return None
+        if not visually_distinct and not known:
+            return None
+        if match is None:
+            return 1
+        number = match.group("number")
+        if number[0].isdigit():
+            return min(number.count(".") + 1, 4)
+        return 1
+
+    @staticmethod
+    def _updated_section_stack(current: list[str], level: int, heading: str) -> list[str]:
+        normalized = " ".join(heading.split())[:512]
+        prefix = current[: max(level - 1, 0)]
+        return [*prefix, normalized]
 
     def _split_page(self, text: str) -> tuple[str, ...]:
         if not text:

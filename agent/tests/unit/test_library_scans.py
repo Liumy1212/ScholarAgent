@@ -223,6 +223,44 @@ def test_scan_preserves_id_when_file_moves(tmp_path: Path) -> None:
     assert current[0].relative_path == "new/renamed.pdf"
 
 
+@pytest.mark.parametrize("relative_path", ["paper.pdf", "uploads/paper.pdf"])
+def test_flatten_legacy_root_preserves_knowledge(tmp_path: Path, relative_path: str) -> None:
+    settings = runtime_settings(tmp_path)
+    legacy_settings = runtime_settings(
+        tmp_path,
+        AIRESEARCHER_PAPER_LIBRARY_DIR=settings.paper_library_dir / "originals",
+    )
+    database = sqlite_database()
+    old_files = LibraryFileService(database=database, settings=legacy_settings)
+    old_scans = LibraryScanService(
+        database=database, settings=legacy_settings, library_file_service=old_files
+    )
+    old_worker = LibraryScanWorker(database=database, settings=legacy_settings, worker_id="old")
+    original = legacy_settings.paper_library_dir / relative_path
+    content = _write_pdf(original, "legacy-root")
+    _run_scan(old_scans, old_worker)
+    file_id = old_files.list_files(offset=0, limit=100).items[0].library_file_id
+    paper_id = _link_ready_paper(database, file_id, original)
+
+    destination = settings.paper_library_dir / "paper.pdf"
+    original.rename(destination)
+    files = LibraryFileService(database=database, settings=settings)
+    scans = LibraryScanService(database=database, settings=settings, library_file_service=files)
+    worker = LibraryScanWorker(database=database, settings=settings, worker_id="new")
+    _run_scan(scans, worker)
+    current = files.list_files(offset=0, limit=100).items
+
+    assert len(current) == 1
+    assert current[0].library_file_id == file_id
+    assert current[0].paper_id == paper_id
+    assert current[0].relative_path == "paper.pdf"
+    assert current[0].searchable is True
+    assert destination.read_bytes() == content
+    assert Path(files.get_file(file_id).path).read_bytes() == content
+    assert _domain_counts(database) == (1, 1, 1)
+    assert scans.get_library_info().originals_path == str(settings.paper_library_dir)
+
+
 def test_scan_registers_same_content_at_multiple_paths_as_duplicate(tmp_path: Path) -> None:
     _database, library_files, scans, worker = _services(tmp_path)
     settings = runtime_settings(tmp_path)
@@ -384,6 +422,7 @@ def test_scan_skips_hidden_temporary_and_unsupported_files(tmp_path: Path) -> No
     settings = runtime_settings(tmp_path)
     originals = settings.paper_library_originals_dir
     _write_pdf(originals / ".hidden-dir" / "hidden.pdf", "hidden-directory")
+    _write_pdf(originals / ".staging" / "pending.pdf", "pending-upload")
     _write_pdf(originals / ".hidden.pdf", "hidden-file")
     _write_pdf(originals / "~draft.pdf", "temporary")
     (originals / "notes.txt").write_text("synthetic", encoding="utf-8")

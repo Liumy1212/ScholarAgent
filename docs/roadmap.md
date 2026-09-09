@@ -15,6 +15,18 @@ AIResearcher 的长期目标是形成从论文获取、理解和证据组织，�
 
 ## 阶段 1：本地论文 RAG 基线
 
+### 论文目录与未来知识库组织
+
+当前整个 `.private/paper-library/` 对应一个知识库，所有论文直接存放其中；上传只使用
+隐藏的 `.staging/` 暂存目录。此次目录简化不改变单库数据模型和检索范围。
+未来采用“一库一文件夹”，再将当前论文迁入相应知识库文件夹；分库创建、切换、库 ID
+和检索隔离仍属规划，不在此次调整中实现。
+
+目录简化已通过契约校验、Agent 88 项测试、Ruff 和 Mypy；测试覆盖根目录上传、扫描、
+Range 预览及旧目录迁移后原件 ID 与知识关联保持。本机真实 PDF 已迁移并校验 SHA-256。
+本次 Docker 引擎不可用，真实数据库的迁移后扫描和全栈复验尚未完成，不能沿用此前
+阶段 1.4 的验收结果作为本次目录调整的全栈验收结论。
+
 阶段 1 建立一条真实可运行的单机闭环。当前 Demo 属于本阶段。
 
 ### 1.1 三端应用与契约基线 — 已完成
@@ -48,7 +60,7 @@ AIResearcher 的长期目标是形成从论文获取、理解和证据组织，�
 
 - Agent API 与 Web API 已定义原件库信息、持久原件清单、只登记上传、逐篇手动入库、扫描任务、
   扫描项、原件状态和排除/恢复接口。
-- Python 已实现 `.private/paper-library`、`originals/`、`.staging/`、安全登记、后台扫描、
+- Python 已实现 `.private/paper-library`、`.staging/`、安全登记、后台扫描、
   手动入库、SHA-256 复用、排除/恢复和严格检索过滤。
 - Java 已代理 library files、manual ingestion、scan、exclusion/restore 与原件 PDF Range，保持
   `Result<T>`、请求 ID、`202` 和 `409 LIBRARY_SCAN_ACTIVE` 语义。
@@ -76,7 +88,7 @@ AIResearcher 的长期目标是形成从论文获取、理解和证据组织，�
 
 - `GET /library/files` 的可选 `libraryState`，固定为 `ORIGINAL_MISSING`、
   `NOT_INGESTED`、`INGESTED`，服务端必须用同一筛选谓词计算分页项目与 `total`。
-- `LibraryInfo.originalsPath`，明确返回扫描器实际递归遍历的 `originals/` 目录。
+- `LibraryInfo.originalsPath`，明确返回扫描器实际递归遍历的论文目录。
 - 正式的 `DELETE /papers/{paperId}` 知识删除：删除 Paper、任务、chunk 和向量，保留所有
   仍存在的 PDF 原件；同时冻结 `PAPER_BUSY`、依赖失败和 Java 下游错误映射。
 - 上传允许 `application/pdf`、`application/octet-stream` 或未提供 MIME，但仍强制
@@ -90,7 +102,7 @@ part 转发、知识删除 Result 和下游错误映射，且不持久化论文�
 反馈、实际扫描目录、服务端状态筛选、逐行入库/重试/预览与只删除知识流程，并停止把
 exclusion/restore 作为页面主删除操作。
 
-两份合成 PDF 的全栈闭环已通过：网页上传会保存到 `originals/uploads/` 并立即显示为未入库；
+两份合成 PDF 的全栈闭环已通过：网页上传会保存到配置的论文目录 并立即显示为未入库；
 目录扫描只登记；逐篇入库可到达 `READY`，进入已入库筛选并在 Chat 中检索出带页码引用的
 答案；手动移走原件后，扫描会保留 Paper 与向量登记但立即禁止检索；缺失状态删除知识会清理
 Paper、任务、chunk、向量和缺失登记；原件仍存在时删除知识会保留 PDF 及其哈希，并将行恢复
@@ -114,6 +126,15 @@ Paper、任务、chunk、向量和缺失登记；原件仍存在时删除知识�
 
 阶段 2 是阶段 1 之后的近期详细规划。任何质量改动都需要可重复评测，不能只凭单次主观回答
 判断效果。
+
+已完成的先行改造：Python Agent 已使用 PyMuPDF block 信息识别编号章节与常见中英文标题，
+在单页和章节边界内切块，并调用 DeepSeek 为每个 chunk 生成文档级定位上下文。结构前缀、
+生成上下文和原文共同用于 embedding，引用 quote 仍严格保留原文；上下文化失败会使整篇入库
+失败且可重试。检索已采用 BGE-M3/Qdrant 与 Agent 内 BM25 双路各自召回候选，使用固定
+`k=60` 的 RRF 合并去重后交给本地 reranker。仓库已提供基于可再分发合成论文的固定中英文
+问题集和只读评测命令，可对比 Dense/Hybrid 的 Recall@20、MRR，并验证返回结果均绑定有效
+paper、page、chunk 和原文 quote。当前机器未启动 MySQL 与 Qdrant，尚未记录真实模型的
+对照数值；版本管理仍属于后续阶段，不能据此宣称完整的阶段 2 已完成。
 
 ### 2.1 入库覆盖与文档理解
 

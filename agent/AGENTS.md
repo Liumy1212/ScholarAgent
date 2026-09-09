@@ -13,11 +13,11 @@ These instructions extend the repository root `AGENTS.md` for work under `agent/
 
 ## Current implementation
 
-- The current Agent uses `AIRESEARCHER_PAPER_LIBRARY_DIR` with `originals/` and `.staging/` for new
-  originals. `AIRESEARCHER_STORAGE_DIR` remains only for legacy migration reads.
+- The current Agent uses `AIRESEARCHER_PAPER_LIBRARY_DIR` directly for PDF files, with `.staging/` for
+  temporary uploads. `AIRESEARCHER_STORAGE_DIR` remains only for legacy migration reads.
 - It implements library registration, scanning, manual ingestion, exclusion/restore, MySQL tasks,
-  PyMuPDF ingestion, Qdrant retrieval, local reranking, DeepSeek Tool Calling, SSE, and citation
-  validation.
+  PyMuPDF ingestion, Qdrant and BM25 retrieval, RRF fusion, local reranking, DeepSeek Tool Calling,
+  SSE, and citation validation.
 - The Frontend uses the unified library workflow and only selects `searchable=true` papers in
   Chat. Keep the compatibility paper routes for older clients until a separate removal task.
 

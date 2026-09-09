@@ -100,6 +100,27 @@ def _write_blank_pdf(path: Path) -> None:
     document.close()  # type: ignore[no-untyped-call]
 
 
+def _write_structured_pdf(path: Path) -> None:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    page = document.new_page()
+    page.insert_text((72, 72), "1 Introduction", fontname="hebo", fontsize=16)
+    page.insert_text(
+        (72, 105),
+        "The introduction defines the contextual retrieval problem and its motivation.",
+        fontsize=11,
+    )
+    page.insert_text((72, 150), "2 Methods", fontname="hebo", fontsize=16)
+    page.insert_text((72, 180), "2.1 Context Generation", fontname="hebo", fontsize=14)
+    page.insert_text(
+        (72, 210),
+        "The model resolves local references using the paper title and section outline.",
+        fontsize=11,
+    )
+    document.set_metadata({"title": "Structured retrieval paper"})
+    document.save(path)  # type: ignore[no-untyped-call]
+    document.close()  # type: ignore[no-untyped-call]
+
+
 def test_compatibility_upload_reuses_original_library_and_sha256_deduplicates(
     tmp_path: Path,
 ) -> None:
@@ -115,13 +136,13 @@ def test_compatibility_upload_reuses_original_library_and_sha256_deduplicates(
     assert first.duplicate is False
     assert second.duplicate is True
     assert second.paper.paper_id == first.paper.paper_id
-    assert first.paper.library_relative_path == "uploads/research.pdf"
+    assert first.paper.library_relative_path == "research.pdf"
     assert first.paper.source_status.value == "AVAILABLE"
     assert first.paper.searchable is False
     stored = service.get_file(first.paper.paper_id)
-    assert Path(stored.path).is_relative_to(settings.paper_library_originals_dir / "uploads")
+    assert Path(stored.path).is_relative_to(settings.paper_library_originals_dir)
     assert Path(stored.path).read_bytes() == content
-    assert len(list((settings.paper_library_originals_dir / "uploads").glob("*.pdf"))) == 1
+    assert len(list((settings.paper_library_originals_dir).glob("*.pdf"))) == 1
     assert not (settings.storage_dir / "papers").exists()
 
 
@@ -446,3 +467,24 @@ def test_parser_rejects_pdf_without_extractable_text(tmp_path: Path) -> None:
         )
 
     assert captured.value.code == "PDF_HAS_NO_TEXT"
+
+
+def test_parser_preserves_heading_hierarchy_without_putting_headings_in_quotes(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "structured.pdf"
+    _write_structured_pdf(pdf_path)
+
+    parsed = PdfParser(max_pages=500, chunk_size=500, chunk_overlap=0).parse(
+        paper_id="paper-structured",
+        path=pdf_path,
+    )
+
+    assert parsed.section_outline == (
+        "1 Introduction",
+        "2 Methods > 2.1 Context Generation",
+    )
+    assert parsed.chunks[0].section_path == ("1 Introduction",)
+    assert parsed.chunks[1].section_path == ("2 Methods", "2.1 Context Generation")
+    assert all(chunk.page == 1 for chunk in parsed.chunks)
+    assert all("Introduction" not in chunk.quote for chunk in parsed.chunks)

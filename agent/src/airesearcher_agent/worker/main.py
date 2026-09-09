@@ -14,6 +14,7 @@ from airesearcher_agent.worker.service import IngestionWorker
 
 def build_ingestion_worker(settings: Settings, *, worker_id: str) -> IngestionWorker:
     from airesearcher_agent.ingestion.pdf import PdfParser
+    from airesearcher_agent.providers.chunk_context import DeepSeekChunkContextProvider
     from airesearcher_agent.retrieval.local_models import BgeM3EmbeddingProvider
     from airesearcher_agent.retrieval.qdrant_store import QdrantVectorStore
 
@@ -24,6 +25,7 @@ def build_ingestion_worker(settings: Settings, *, worker_id: str) -> IngestionWo
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         ),
+        context_provider=DeepSeekChunkContextProvider(settings),
         embedding=BgeM3EmbeddingProvider(settings),
         vector_store=QdrantVectorStore.from_settings(settings),
         settings=settings,

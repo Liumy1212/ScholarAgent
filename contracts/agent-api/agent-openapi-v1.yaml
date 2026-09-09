@@ -773,7 +773,7 @@ components:
           type: string
           minLength: 1
           maxLength: 2048
-          description: 相对 originals 目录的正斜杠路径；不得是绝对路径或包含路径穿越。
+          description: 相对配置的论文目录的正斜杠路径；不得是绝对路径或包含路径穿越。
         sourceStatus:
           $ref: '#/components/schemas/PaperSourceStatus'
         status:
@@ -897,7 +897,7 @@ components:
           type: string
           minLength: 1
           maxLength: 2048
-          description: 相对 originals 目录的正斜杠路径；不得是绝对路径或包含路径穿越。
+          description: 相对配置的论文目录的正斜杠路径；不得是绝对路径或包含路径穿越。
         fileName:
           type: string
           minLength: 1
@@ -1045,7 +1045,7 @@ components:
         originalsPath:
           type: string
           minLength: 1
-          description: 扫描器实际递归遍历、供本机用户直接存放 PDF 的 originals 目录绝对路径。
+          description: 扫描器实际递归遍历、供本机用户直接存放 PDF 的论文目录绝对路径；当前与 rootPath 相同。
         supportedExtensions:
           type: array
           minItems: 1
@@ -1166,7 +1166,7 @@ components:
             $ref: '#/components/schemas/LibraryInfo'
           example:
             rootPath: 'D:/AIResearcher/.private/paper-library'
-            originalsPath: 'D:/AIResearcher/.private/paper-library/originals'
+            originalsPath: 'D:/AIResearcher/.private/paper-library'
             supportedExtensions: ['.pdf']
             scanInProgress: false
             latestScan: null
@@ -1182,7 +1182,7 @@ components:
           example:
             items:
               - libraryFileId: library-file-demo-001
-                relativePath: uploads/synthetic-demo.pdf
+                relativePath: synthetic-demo.pdf
                 fileName: synthetic-demo.pdf
                 fileSizeBytes: 4096
                 sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -1210,7 +1210,7 @@ components:
           example:
             libraryFile:
               libraryFileId: library-file-demo-001
-              relativePath: uploads/synthetic-demo.pdf
+              relativePath: synthetic-demo.pdf
               fileName: synthetic-demo.pdf
               fileSizeBytes: 4096
               sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

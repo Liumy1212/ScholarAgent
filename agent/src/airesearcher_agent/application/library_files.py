@@ -384,8 +384,6 @@ class LibraryFileService:
     def _ensure_safe_directories(self) -> None:
         for path in (
             self._settings.paper_library_dir,
-            self._settings.paper_library_originals_dir,
-            self._settings.paper_library_originals_dir / "uploads",
             self._settings.paper_library_staging_dir,
         ):
             if path.is_symlink():
@@ -403,7 +401,7 @@ class LibraryFileService:
                 message="原件库目录不可用。",
             ) from error
         for path in (
-            self._settings.paper_library_originals_dir / "uploads",
+            self._settings.paper_library_originals_dir,
             self._settings.paper_library_staging_dir,
         ):
             if path.is_symlink() or not path.is_dir():
@@ -484,7 +482,7 @@ class LibraryFileService:
         *,
         force_unique: bool = False,
     ) -> Path:
-        uploads = self._settings.paper_library_originals_dir / "uploads"
+        uploads = self._settings.paper_library_originals_dir
         requested = uploads / file_name
         if not force_unique and not requested.exists() and not requested.is_symlink():
             return requested

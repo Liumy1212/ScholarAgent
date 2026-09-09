@@ -760,7 +760,7 @@ class LibraryScanWorker:
             if not path.resolve().is_relative_to(originals.resolve()):
                 raise ScanFileError(
                     code="UNSAFE_LIBRARY_PATH",
-                    message="原件路径超出 originals 目录。",
+                    message="原件路径超出论文目录。",
                 )
         except ScanFileError:
             raise

@@ -124,16 +124,21 @@ def test_upload_registers_original_without_creating_ingestion(tmp_path: Path) ->
     result = asyncio.run(service.upload(MemoryUpload(content, filename="new-paper.pdf")))
 
     assert result.duplicate is False
-    assert result.library_file.relative_path == "uploads/new-paper.pdf"
+    assert result.library_file.relative_path == "new-paper.pdf"
     assert result.library_file.source_status is LibraryFileSourceStatus.AVAILABLE
     assert result.library_file.knowledge_status is LibraryFileKnowledgeStatus.NOT_INGESTED
     assert result.library_file.paper_id is None
     assert result.library_file.current_ingestion is None
     assert result.library_file.searchable is False
     assert _counts(database) == (1, 0, 0)
-    stored_path = settings.paper_library_originals_dir / "uploads" / "new-paper.pdf"
+    stored_path = settings.paper_library_originals_dir / "new-paper.pdf"
     assert stored_path.read_bytes() == content
     assert list(settings.paper_library_staging_dir.iterdir()) == []
+    assert settings.paper_library_originals_dir == settings.paper_library_dir
+    assert {path.name for path in settings.paper_library_dir.iterdir()} == {
+        "new-paper.pdf",
+        ".staging",
+    }
 
 
 @pytest.mark.parametrize("content_type", ["application/pdf", "application/octet-stream", None, ""])
@@ -154,8 +159,8 @@ def test_upload_accepts_contract_pdf_content_types(
         )
     )
 
-    assert result.library_file.relative_path == "uploads/accepted.pdf"
-    assert (settings.paper_library_originals_dir / "uploads" / "accepted.pdf").is_file()
+    assert result.library_file.relative_path == "accepted.pdf"
+    assert (settings.paper_library_originals_dir / "accepted.pdf").is_file()
 
 
 def test_library_state_filters_share_predicate_with_total_and_pagination(
@@ -265,7 +270,7 @@ def test_duplicate_content_is_not_stored_twice_and_list_is_paginated(tmp_path: P
     assert page.offset == 0
     assert page.limit == 1
     assert page.items == (first.library_file,)
-    assert [path.name for path in (settings.paper_library_originals_dir / "uploads").iterdir()] == [
+    assert [path.name for path in (settings.paper_library_originals_dir).glob("*.pdf")] == [
         "first.pdf"
     ]
 
@@ -280,8 +285,8 @@ def test_same_name_with_different_content_never_overwrites(tmp_path: Path) -> No
     first = asyncio.run(service.upload(MemoryUpload(first_content, filename="paper.pdf")))
     second = asyncio.run(service.upload(MemoryUpload(second_content, filename="paper.pdf")))
 
-    assert first.library_file.relative_path == "uploads/paper.pdf"
-    assert second.library_file.relative_path.startswith("uploads/paper-")
+    assert first.library_file.relative_path == "paper.pdf"
+    assert second.library_file.relative_path.startswith("paper-")
     assert second.library_file.relative_path.endswith(".pdf")
     first_stored = service.get_file(first.library_file.library_file_id)
     second_stored = service.get_file(second.library_file.library_file_id)

@@ -60,7 +60,8 @@ flowchart LR
 - 是论文文件及 AI 领域数据的唯一事实来源。
 - 管理原件登记、扫描任务、论文、入库任务、chunk、会话、消息、Run、工具调用和引用，并
   负责状态筛选、扫描对账与知识删除的真实语义。
-- 承担 PDF 解析、embedding、Qdrant 检索、Rerank、Tool Calling、Prompt 和模型适配。
+- 承担 PDF 解析、embedding、Qdrant 与 BM25 检索、RRF 融合、Rerank、Tool Calling、Prompt
+  和模型适配。
 - 通过独立 Worker 使用 MySQL 持久任务与租约执行后台扫描和入库；扫描不会加载模型。
 - 将 PDF、用户输入和工具输出视为不可信内容，不允许其改变系统规则或工具权限。
 
@@ -69,14 +70,16 @@ flowchart LR
 ### 原件登记与 PDF 入库
 
 1. 上传先写入 `AIRESEARCHER_PAPER_LIBRARY_DIR/.staging/`，完成 PDF 签名、大小、稳定性、
-   路径和 SHA-256 校验后原子保存到 `originals/uploads/`；此时仅登记 `LibraryFile`。
-2. 目录扫描递归检查 `originals/`，登记新增、重复、移动、替换与缺失状态；单文件失败记录到
+   路径和 SHA-256 校验后原子保存到 `AIRESEARCHER_PAPER_LIBRARY_DIR/`；此时仅登记 `LibraryFile`。
+2. 目录扫描递归检查配置的论文目录，登记新增、重复、移动、替换与缺失状态；单文件失败记录到
    扫描项，致命遍历失败不执行缺失对账。外部删除已关联 Paper 的原件只标记 `MISSING`，
    无 Paper 的陈旧登记直接清理；同路径替换只保留仍有关联知识的旧 `REPLACED` 记录。
 3. 扫描发现与既有 Paper 相同的 SHA-256 时只建立原件关联，不创建任务、chunk 或向量。
 4. 用户显式请求入库后，Python 复用相同 SHA-256 的 Paper，或事务性创建 Paper 与入库任务。
-5. Worker 在解析前后重新验证原件，使用 PyMuPDF 按页解析、切块，再生成 embedding 并写入
-   Qdrant；失败不得发布可检索半成品。
+5. Worker 在解析前后重新验证原件，使用 PyMuPDF block 信息识别章节并构造页内 chunk；
+   DeepSeek 根据论文标题、章节目录和相邻片段为每个 chunk 生成定位上下文，再将结构前缀、
+   生成上下文与原文拼接后生成 embedding 并写入 Qdrant。生成内容不进入 quote；任一上下文
+   调用失败都会使整篇入库失败且可重试，不发布可检索半成品。
 6. 兼容性 `POST /papers` 复用同一原件登记器后自动执行第 4 步，仅为旧客户端保留；当前
    React 页面不再调用该路径。
 
@@ -96,10 +99,15 @@ flowchart LR
 
 1. 浏览器经 Java 发起 POST SSE 请求。
 2. Python 创建 Agent Run，并由 DeepSeek 原生 Tool Calling 决定是否调用只读工具。
-3. `knowledge_base_search` 从 Qdrant 召回候选 chunk，再使用本地 reranker 排序。
+3. `knowledge_base_search` 从 Qdrant 和基于 MySQL chunk 构建的 BM25 各召回候选，使用
+   RRF 合并去重后截取候选，再由本地 reranker 排序。
 4. 工具证据携带 paper、page、quote、chunk 和 citation ID。
 5. Python 只接受能够映射到本轮工具证据的论文引用。
 6. Java 原样转发 SSE 事件，React 展示工具状态、回答和可跳页引用。
+
+离线评测使用仓库内固定的合成问题集，按合成论文标题解析当前 paper ID，分别执行 Dense
+与 Hybrid 检索并计算 Recall@20、MRR 和来源追踪完整率。评测只读 MySQL/Qdrant，不保存
+论文内容、模型输出或评测结果。
 
 ## 4. 数据与存储边界
 
@@ -113,7 +121,7 @@ flowchart LR
 | Qdrant 向量 | Docker named volume `airesearcher_qdrant_data` |
 | 本机秘密 | 被 Git 忽略的根目录 `.env` |
 
-原件库固定包含 `originals/` 与 `.staging/`；`.private/` 被 Git 忽略且不得提交。旧
+PDF 直接存放在原件库根目录，仅 `.staging/` 用于上传暂存；`.private/` 被 Git 忽略且不得提交。旧
 `AIRESEARCHER_STORAGE_DIR` 只用于迁移期兼容读取，不是新原件的落盘位置。
 
 `infrastructure/` 只保存 Compose 配置，不保存数据库或向量运行数据。当前 Java 没有业务
@@ -128,8 +136,7 @@ API Key、密码、Token、数据库、向量、模型、缓存和日志。
 - Java 调用 Python：`/agent-api/v1/**`。
 - 两层 API 均已提供 library files、`libraryState`、manual ingestion、scan、知识删除和
   exclusion/restore；React 通过 Java BFF 使用前五项，exclusion/restore 作为兼容接口保留。
-- `LibraryInfo.originalsPath` 返回扫描器实际遍历的 `originals/` 目录；网页上传写入该目录
-  下的 `uploads/`。
+- `LibraryInfo.originalsPath` 返回扫描器实际遍历的论文目录，与 `rootPath` 相同；网页上传直接写入该目录。
 - 普通 Java JSON API 使用 `Result<T>`；Agent JSON API 使用直接 DTO。
 - SSE、PDF 下载和健康检查不包装 `Result<T>`。
 - PDF 代理保留 `Range`、`Content-Range`、`Content-Length`、`Content-Type`、
@@ -146,7 +153,8 @@ API Key、密码、Token、数据库、向量、模型、缓存和日志。
   向量，只有显式知识删除才清理它们。兼容性排除保留原件和最小登记信息，并清理 chunk 与
   Qdrant 向量。
 - 上传和扫描只登记原件，不自动创建入库任务；兼容性 `POST /papers` 是明确保留的例外。
-- chunk 不跨 PDF 页，论文证据必须能够回溯到 paper、page、quote 和 chunk。
+- chunk 不跨 PDF 页或已识别章节，论文证据必须能够回溯到 paper、page、原文 quote 和 chunk；
+  模型生成的 chunk 上下文只能用于检索与重排。
 - Worker 使用任务租约和确定性向量 ID 保证重试幂等；失败任务不得把论文标记为
   `READY`。
 - 模型只能把当前工具结果中的 citation ID 输出为论文证据。

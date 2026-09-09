@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pymupdf
 from tests.support import (
+    DeterministicChunkContext,
     DeterministicEmbedding,
     MemoryUpload,
     RecordingVectorStore,
@@ -56,9 +57,11 @@ def test_worker_retries_transient_failure_then_marks_paper_ready(tmp_path: Path)
         service.upload(MemoryUpload(_pdf_bytes(tmp_path / "worker.pdf"), filename="worker.pdf"))
     )
     embedding = DeterministicEmbedding(fail_calls=1)
+    context_provider = DeterministicChunkContext()
     worker = IngestionWorker(
         database=database,
         parser=PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20),
+        context_provider=context_provider,
         embedding=embedding,
         vector_store=vectors,
         settings=settings,
@@ -86,6 +89,14 @@ def test_worker_retries_transient_failure_then_marks_paper_ready(tmp_path: Path)
     assert len(vectors.upserts) == 1
     assert vectors.upserts[0][0] == paper.paper_id
     assert vectors.deleted_papers == [paper.paper_id]
+    assert context_provider.calls
+    assert embedding.calls[-1][0].startswith("论文标题：")
+    with database.session() as session:
+        chunk = session.query(ChunkRecord).first()
+        assert chunk is not None
+        assert chunk.quote not in chunk.context_text
+        assert "上下文：" in chunk.text
+        assert chunk.quote in chunk.text
 
 
 def test_worker_recovers_an_expired_database_lease(tmp_path: Path) -> None:
@@ -111,6 +122,7 @@ def test_worker_recovers_an_expired_database_lease(tmp_path: Path) -> None:
     worker = IngestionWorker(
         database=database,
         parser=PdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        context_provider=DeterministicChunkContext(),
         embedding=DeterministicEmbedding(),
         vector_store=vectors,
         settings=settings,
@@ -138,6 +150,7 @@ def test_worker_rejects_an_original_changed_after_parsing_without_publishing(
     worker = IngestionWorker(
         database=database,
         parser=MutatingPdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        context_provider=DeterministicChunkContext(),
         embedding=DeterministicEmbedding(),
         vector_store=vectors,
         settings=settings,
@@ -152,6 +165,36 @@ def test_worker_rejects_an_original_changed_after_parsing_without_publishing(
     assert failed.failure.code == "LIBRARY_FILE_CHANGED"
     assert failed.can_retry is False
     assert service.get_paper(uploaded.paper.paper_id).status is PaperStatus.FAILED
+    assert vectors.upserts == []
+    with database.session() as session:
+        assert session.query(ChunkRecord).count() == 0
+
+
+def test_worker_fails_retryably_when_chunk_context_generation_fails(tmp_path: Path) -> None:
+    settings = runtime_settings(tmp_path)
+    database = sqlite_database()
+    vectors = RecordingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    uploaded = asyncio.run(
+        service.upload(MemoryUpload(_pdf_bytes(tmp_path / "context.pdf"), filename="context.pdf"))
+    )
+    worker = IngestionWorker(
+        database=database,
+        parser=PdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        context_provider=DeterministicChunkContext(fail_calls=1),
+        embedding=DeterministicEmbedding(),
+        vector_store=vectors,
+        settings=settings,
+        worker_id="context-worker",
+    )
+
+    assert worker.run_once() is True
+
+    failed = service.get_job(uploaded.ingestion_job.job_id)
+    assert failed.status is IngestionJobStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.code == "CONTEXTUALIZATION_FAILED"
+    assert failed.can_retry is True
     assert vectors.upserts == []
     with database.session() as session:
         assert session.query(ChunkRecord).count() == 0

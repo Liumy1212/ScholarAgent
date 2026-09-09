@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     )
     chunk_size: int = Field(default=1200, alias="AIRESEARCHER_CHUNK_SIZE", ge=200, le=8000)
     chunk_overlap: int = Field(default=160, alias="AIRESEARCHER_CHUNK_OVERLAP", ge=0)
+    chunk_context_max_chars: int = Field(
+        default=500,
+        alias="AIRESEARCHER_CHUNK_CONTEXT_MAX_CHARS",
+        ge=100,
+        le=2000,
+    )
 
     worker_poll_seconds: float = Field(
         default=2.0,
@@ -181,14 +187,14 @@ class Settings(BaseSettings):
 
     @cached_property
     def paper_library_originals_dir(self) -> Path:
-        return self.paper_library_dir / "originals"
+        return self.paper_library_dir
 
     @cached_property
     def paper_library_staging_dir(self) -> Path:
         return self.paper_library_dir / ".staging"
 
     def ensure_paper_library_directories(self) -> None:
-        (self.paper_library_originals_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        self.paper_library_originals_dir.mkdir(parents=True, exist_ok=True)
         self.paper_library_staging_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_runtime_directories(self) -> None:

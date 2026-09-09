@@ -32,31 +32,45 @@ def main() -> None:
     )
 
     page_one = document.new_page(width=595, height=842)
+    page_one.insert_text(
+        (54, 72),
+        "Aurora Bamboo Calibration Study",
+        fontsize=18,
+        fontname="hebo",
+    )
+    page_one.insert_text((54, 98), "Lin Qiao and Morgan Reed, 2026", fontsize=11)
+    page_one.insert_text((54, 135), "Abstract", fontsize=14, fontname="hebo")
     page_one.insert_textbox(
-        pymupdf.Rect(54, 60, 541, 780),
-        """Aurora Bamboo Calibration Study
-
-Lin Qiao and Morgan Reed, 2026
-
-Abstract
-
-This synthetic study evaluates a bilingual retrieval pipeline on the Aurora-Bamboo benchmark. The benchmark contains paired English and Chinese passages and requires every reported result to remain traceable to its source page.
-
-Method
-
-The system first recalls candidate passages with multilingual dense embeddings. A local cross-encoder then reranks the candidates before evidence is presented to the language model. The experiment intentionally records the decisive calibration result on the following page so page-level citation behavior can be tested.
-""",
+        pymupdf.Rect(54, 155, 541, 285),
+        "This synthetic study evaluates a bilingual retrieval pipeline on the Aurora-Bamboo "
+        "benchmark. The benchmark contains paired English and Chinese passages and requires "
+        "every reported result to remain traceable to its source page.",
+        fontsize=12,
+        fontname="helv",
+        lineheight=1.45,
+    )
+    page_one.insert_text((54, 315), "1 Method", fontsize=14, fontname="hebo")
+    page_one.insert_textbox(
+        pymupdf.Rect(54, 335, 541, 520),
+        "The system first recalls candidate passages with multilingual dense embeddings. "
+        "A local cross-encoder then reranks the candidates before evidence is presented to "
+        "the language model. The experiment intentionally records the decisive calibration "
+        "result on the following page so page-level citation behavior can be tested.",
         fontsize=12,
         fontname="helv",
         lineheight=1.45,
     )
 
     page_two = document.new_page(width=595, height=842)
+    page_two.insert_text(
+        (54, 72),
+        "2 实验结果 / Results",
+        fontsize=16,
+        fontname="china-s",
+    )
     page_two.insert_textbox(
-        pymupdf.Rect(54, 60, 541, 780),
-        """实验结果 / Results
-
-在 Aurora-Bamboo 双语基准上，研究团队将“月光竹门控”（Moonlight Bamboo Gate）的校准延迟固定为 37 毫秒。这个数值只出现在本页，用于验证问答系统能否检索并引用正确页码。
+        pymupdf.Rect(54, 95, 541, 500),
+        """在 Aurora-Bamboo 双语基准上，研究团队将“月光竹门控”（Moonlight Bamboo Gate）的校准延迟固定为 37 毫秒。这个数值只出现在本页，用于验证问答系统能否检索并引用正确页码。
 
 The decisive result is that the Moonlight Bamboo Gate uses a calibration latency of exactly 37 milliseconds. This value appears only on page 2 and is the ground-truth answer for the citation acceptance test.
 

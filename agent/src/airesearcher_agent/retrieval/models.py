@@ -8,6 +8,23 @@ class SearchHit:
 
 
 @dataclass(frozen=True, slots=True)
+class KeywordDocument:
+    chunk_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class RankedChunk:
+    chunk_id: str
+    paper_id: str
+    title: str
+    page: int
+    quote: str
+    retrieval_score: float
+    rerank_score: float
+
+
+@dataclass(frozen=True, slots=True)
 class Evidence:
     citation_id: str
     paper_id: str

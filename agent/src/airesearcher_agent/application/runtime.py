@@ -10,6 +10,7 @@ from airesearcher_agent.config import Settings
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.providers.deepseek import DeepSeekToolCallingProvider
 from airesearcher_agent.providers.deepseek_client import DeepSeekHttpClient
+from airesearcher_agent.retrieval.bm25 import Bm25KeywordRetriever
 from airesearcher_agent.retrieval.local_models import BgeM3EmbeddingProvider, BgeReranker
 from airesearcher_agent.retrieval.qdrant_store import QdrantVectorStore
 from airesearcher_agent.retrieval.tools import RetrievalTools
@@ -35,6 +36,7 @@ def build_runtime(settings: Settings | None = None) -> RuntimeServices:
     retrieval_tools = RetrievalTools(
         database=database,
         embedding=embedding,
+        keyword_retriever=Bm25KeywordRetriever(),
         reranker=reranker,
         vector_store=vector_store,
         settings=selected,

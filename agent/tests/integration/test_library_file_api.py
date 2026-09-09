@@ -107,7 +107,7 @@ def test_library_upload_list_and_range_preview_do_not_start_ingestion(tmp_path: 
         assert uploaded.json()["libraryFile"]["paperId"] is None
         assert listed.status_code == 200
         assert listed.json()["total"] == 1
-        assert listed.json()["items"][0]["relativePath"] == "uploads/api-paper.pdf"
+        assert listed.json()["items"][0]["relativePath"] == "api-paper.pdf"
         assert filtered.status_code == 200
         assert filtered.json()["total"] == 1
         assert invalid_filter.status_code == 400
@@ -182,8 +182,8 @@ def test_library_upload_api_accepts_relaxed_pdf_mime(
             )
 
         assert response.status_code == 200
-        assert response.json()["libraryFile"]["relativePath"] == "uploads/relaxed.pdf"
-        assert (settings.paper_library_originals_dir / "uploads" / "relaxed.pdf").is_file()
+        assert response.json()["libraryFile"]["relativePath"] == "relaxed.pdf"
+        assert (settings.paper_library_originals_dir / "relaxed.pdf").is_file()
 
     asyncio.run(exercise())
 
@@ -376,7 +376,7 @@ def test_delete_knowledge_api_preserves_available_original_and_unlinks_row(
         assert listed.json()["total"] == 1
         assert listed.json()["items"][0]["paperId"] is None
         assert (
-            settings.paper_library_originals_dir / "uploads" / "delete-api.pdf"
+            settings.paper_library_originals_dir / "delete-api.pdf"
         ).read_bytes() == b"%PDF-1.7\ndelete-api"
         assert vectors.deleted_papers == [paper_id]
         with database.session() as session:

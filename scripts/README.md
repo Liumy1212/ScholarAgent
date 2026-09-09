@@ -8,7 +8,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `start-dev.ps1` | Windows 环境检查、一键启动基础设施和四个应用 |
-| `generate_demo_pdf.py` | 在仓库外生成可再分发的两页中英文冒烟 PDF |
+| `generate_demo_pdf.py` | 在仓库外生成带章节结构及页级检索真值的两页中英文冒烟 PDF |
 
 ### 启动
 
@@ -19,7 +19,8 @@
 
 脚本读取根目录 `.env`，要求 `AIRESEARCHER_PAPER_LIBRARY_DIR` 位于仓库内被 Git 忽略的
 `.private/` 子目录，并要求模型缓存位于仓库外。`-CheckOnly` 只验证边界，不创建目录；
-正常启动会准备 `originals/` 与 `.staging/`。
+正常启动会准备论文目录与其中的 `.staging/`，先启动 Agent API 并等待健康检查通过，再启动
+Worker、Java BFF 和 React，避免 Agent 冷启动期间页面误报服务不可用。
 完整环境、首次部署、再次运行、停止和手动启动见
 [Windows 本地部署与运行](../docs/deployment.md)。
 
@@ -31,3 +32,5 @@ conda run -n airesearcher-agent python .\scripts\generate_demo_pdf.py `
 ```
 
 生成器拒绝把输出写入仓库。目标目录必须由调用者明确指定。
+生成论文的固定标题为 `Aurora Bamboo Calibration Study`，入库后可由 Agent 的 evaluation
+命令对比 Dense 与 Hybrid 的 Recall@20、MRR 和来源追踪完整率。

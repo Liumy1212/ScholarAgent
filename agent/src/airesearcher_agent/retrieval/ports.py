@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from airesearcher_agent.retrieval.models import SearchHit
+from airesearcher_agent.retrieval.models import KeywordDocument, SearchHit
 
 
 class EmbeddingProvider(Protocol):
@@ -12,6 +12,16 @@ class EmbeddingProvider(Protocol):
 
 class Reranker(Protocol):
     def score(self, query: str, passages: list[str]) -> list[float]: ...
+
+
+class KeywordRetriever(Protocol):
+    def search(
+        self,
+        *,
+        query: str,
+        documents: list[KeywordDocument],
+        limit: int,
+    ) -> list[SearchHit]: ...
 
 
 class VectorStore(Protocol):

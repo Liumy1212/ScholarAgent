@@ -158,6 +158,25 @@ function Start-DevelopmentTerminal {
     ) | Out-Null
 }
 
+function Wait-AgentHealthy {
+    param([int]$TimeoutSeconds = 180)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest `
+                -Uri 'http://127.0.0.1:8000/health' `
+                -UseBasicParsing `
+                -TimeoutSec 2
+            if ($response.StatusCode -eq 200) {
+                return
+            }
+        } catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+    Fail "Agent API 在 $TimeoutSeconds 秒内未就绪。请查看 'AIResearcher - Agent API' 终端中的错误。"
+}
+
 Write-Step '校验环境配置'
 $EnvironmentValues = Read-EnvironmentFile -Path $EnvFile
 $RequiredValues = @(
@@ -279,7 +298,7 @@ if ($CheckOnly) {
 }
 
 Write-Step '准备本地论文原件库目录'
-New-Item -ItemType Directory -Path (Join-Path $PaperLibraryDirectory 'originals') -Force | Out-Null
+New-Item -ItemType Directory -Path $PaperLibraryDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $PaperLibraryDirectory '.staging') -Force | Out-Null
 
 Write-Step '检查应用端口'
@@ -352,15 +371,18 @@ try {
     Pop-Location
 }
 
-Write-Step '在独立终端中启动四个应用'
+Write-Step '启动 Agent API 并等待健康检查'
 Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Agent API' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m uvicorn airesearcher_agent.main:app --app-dir .\agent\src --host 127.0.0.1 --port 8000'
+Wait-AgentHealthy
+
+Write-Step '启动 Worker、Java BFF 和 React'
 Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Worker' -WorkingDirectory $RepositoryRoot -Command 'conda run -n airesearcher-agent python -m airesearcher_agent.worker.main'
 Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - Java BFF' -WorkingDirectory (Join-Path $RepositoryRoot 'backend') -Command '.\mvnw.cmd spring-boot:run'
 Start-DevelopmentTerminal -PowerShellPath $PowerShellExecutable -Title 'AIResearcher - React' -WorkingDirectory (Join-Path $RepositoryRoot 'frontend') -Command 'pnpm dev'
 
 Write-Host @"
 
-启动命令已发出。
+启动命令已发出，Agent API 健康检查已通过。
   Web:       http://127.0.0.1:5173
   Java BFF:  http://127.0.0.1:8080
   Agent API: http://127.0.0.1:8000

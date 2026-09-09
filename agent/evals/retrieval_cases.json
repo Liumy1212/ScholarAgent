@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "name": "aurora-bamboo-retrieval-v1",
+  "cases": [
+    {
+      "id": "exact-latency-en",
+      "category": "exact-term",
+      "paperTitle": "Aurora Bamboo Calibration Study",
+      "query": "What is the exact calibration latency of the Moonlight Bamboo Gate?",
+      "relevantPages": [2]
+    },
+    {
+      "id": "exact-latency-zh",
+      "category": "bilingual-term",
+      "paperTitle": "Aurora Bamboo Calibration Study",
+      "query": "月光竹门控的校准延迟是多少毫秒？",
+      "relevantPages": [2]
+    },
+    {
+      "id": "benchmark-purpose",
+      "category": "document-context",
+      "paperTitle": "Aurora Bamboo Calibration Study",
+      "query": "What does the Aurora-Bamboo benchmark require reported results to preserve?",
+      "relevantPages": [1]
+    },
+    {
+      "id": "retrieval-pipeline",
+      "category": "method",
+      "paperTitle": "Aurora Bamboo Calibration Study",
+      "query": "Which retrieval and reranking components are used before presenting evidence?",
+      "relevantPages": [1]
+    },
+    {
+      "id": "traceability-identifiers",
+      "category": "traceability",
+      "paperTitle": "Aurora Bamboo Calibration Study",
+      "query": "Which identifiers should be preserved throughout retrieval and answer generation?",
+      "relevantPages": [2]
+    }
+  ]
+}

@@ -114,3 +114,5 @@ class ParsedChunk:
     ordinal: int
     text: str
     quote: str
+    section_path: tuple[str, ...] = ()
+    context_text: str = ""

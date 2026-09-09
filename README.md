@@ -10,15 +10,15 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 当前实现支持：
 
 - React 仅通过 Java BFF 访问 Python Agent。
-- Python 在 `.private/paper-library/originals/` 管理 PDF 原件；网页上传保存到
-  `originals/uploads/`，登记、扫描与知识库入库彼此分开。
+- Python 在 `.private/paper-library/` 管理 PDF 原件；网页上传保存到
+  同一目录，登记、扫描与知识库入库彼此分开。
 - Agent 与 Java 提供原件上传、服务端状态筛选、目录扫描、手动入库、知识删除、兼容性
   排除/恢复和 PDF Range 接口。
 - React 展示实际扫描目录、统一原件清单、筛选后的总数、入库进度和可检索状态，并提供
   逐篇入库、重试、PDF 预览与知识删除；网页上传和扫描都不会自动入库。
 - Chat 只允许选择 `searchable=true` 的论文。
-- 兼容性上传仍可由 Python Worker 完成解析、按页切块和后台建库。
-- 使用 BGE-M3 embedding、Qdrant 检索和本地 Rerank。
+- 兼容性上传仍可由 Python Worker 完成章节感知的页内切块、逐 Chunk 上下文化和后台建库。
+- 使用 BGE-M3/Qdrant 向量召回与 Agent 内 BM25 关键词召回，经 RRF 融合后本地 Rerank。
 - 使用 DeepSeek 原生 Tool Calling 选择知识库检索或文档查询工具。
 - 通过 SSE 返回工具状态、流式回答和可跳转到 PDF 页码的引用。
 - 使用 MySQL 保存论文、任务、会话、Run 和引用等 Agent 数据。
@@ -26,7 +26,7 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 ```text
 上传或扫描 PDF 原件 → 手动确认入库 → 后台解析与建库 → Web 预览
 → 用户提问 → Tool Calling
-→ 检索与 Rerank → SSE 流式回答
+→ 向量与 BM25 检索 → RRF 融合与 Rerank → SSE 流式回答
 → 展示论文证据与页码引用
 ```
 
@@ -92,6 +92,6 @@ Copy-Item .\.env.example .\.env
 ## 数据安全
 
 `.env`、API Key、密码、真实 PDF、数据库、向量、模型、缓存和日志不得提交到 Git。
-论文原件位于被 Git 忽略的 `.private/paper-library/originals/`，其中网页上传进入
-`originals/uploads/`；模型缓存必须位于仓库外，MySQL 与 Qdrant 数据保存在 Docker named
+论文原件位于被 Git 忽略的 `.private/paper-library/`，其中网页上传进入
+同一目录；模型缓存必须位于仓库外，MySQL 与 Qdrant 数据保存在 Docker named
 volume 中。仓库只接收代码、非敏感配置模板、迁移、合成测试数据和公开文档。

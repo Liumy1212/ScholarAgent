@@ -4,8 +4,8 @@
 后续再次运行。当前尚未提供 Linux/macOS 等价启动脚本，也没有全栈生产部署方案。
 
 当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理论文原件，默认值为仓库内被 Git
-忽略的 `.private/paper-library`。扫描器实际递归遍历 `originals/`，网页/API 上传固定进入
-`originals/uploads/`。三端已支持原件登记、扫描、状态筛选、手动入库、知识删除及兼容性
+忽略的 `.private/paper-library`。扫描器实际递归遍历该目录，网页/API 上传也直接保存到该目录。
+三端已支持原件登记、扫描、状态筛选、手动入库、知识删除及兼容性
 排除/恢复；以下步骤是本机端到端复验流程。
 
 ## 1. 环境与版本要求
@@ -13,7 +13,7 @@
 | 工具或服务 | 要求 | 用途 |
 | --- | --- | --- |
 | Windows | Windows 10/11 | 当前支持的本地开发平台 |
-| PowerShell | PowerShell 7，命令为 `pwsh` | 启动脚本和应用终端 |
+| PowerShell | PowerShell 7；Windows PowerShell 5.1 可兼容运行 | 启动脚本和应用终端 |
 | Git | 可使用 `git` 命令 | 验证本地原件库不会被提交 |
 | Docker Desktop | 已启动，支持 Compose v2 | 运行 MySQL 与 Qdrant |
 | Conda | Miniconda 或 Anaconda | 隔离 Python Agent 环境 |
@@ -131,8 +131,7 @@ AIRESEARCHER_MODEL_CACHE_DIR=C:/Users/your-name/.cache/airesearcher/models
 
 ```text
 .private/paper-library/
-├─ originals/          用户管理的 PDF 原件
-│  └─ uploads/         网页/API 上传的原件
+├─ example.pdf        手动放入或网页/API 上传的论文
 └─ .staging/           上传校验与原子落盘暂存
 ```
 
@@ -163,6 +162,7 @@ volume 内的账户或密码。
 | `AIRESEARCHER_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` |
 | `AIRESEARCHER_MODEL_DEVICE` | `auto`，可改为 `cpu` |
 | `AIRESEARCHER_VECTOR_SIZE` | `1024`，必须与 embedding 和 collection 一致 |
+| `AIRESEARCHER_CHUNK_CONTEXT_MAX_CHARS` | `500`，单个 Chunk 的检索上下文字符上限 |
 | `AIRESEARCHER_AGENT_BASE_URL` | Java 调用 Agent 的 `http://127.0.0.1:8000` |
 | `AIRESEARCHER_AGENT_CONNECT_TIMEOUT` | Java 下游连接超时，默认 `2s` |
 | `AIRESEARCHER_AGENT_OPEN_TIMEOUT` | Java 等待 SSE 建流超时，默认 `5s` |
@@ -200,11 +200,12 @@ volume 内的账户或密码。
 脚本按以下顺序工作：
 
 1. 再次校验配置、原件库边界、Git 忽略规则、工具和项目依赖。
-2. 创建原件库的 `originals/` 与 `.staging/`。
+2. 创建论文目录及其中的 `.staging/`。
 3. 确认 Agent、Java 和 React 端口未被占用。
 4. 启动 MySQL 与 Qdrant，并等待健康检查。
 5. 执行 `alembic upgrade head`。
-6. 分别打开 Agent API、Worker、Java BFF 和 React 的 PowerShell 终端。
+6. 打开 Agent API 终端并等待 `/health` 通过（最长 180 秒）。
+7. 再分别打开 Worker、Java BFF 和 React 的 PowerShell 终端。
 
 启动命令可以从任意当前目录调用，也可以显式指定其他环境文件：
 
@@ -237,21 +238,20 @@ Compose 中 MySQL 应显示 `healthy`，Qdrant 健康端点应返回成功。
 ```powershell
 $demoPdf = Join-Path $env:TEMP 'airesearcher-demo.pdf'
 conda run -n airesearcher-agent python .\scripts\generate_demo_pdf.py $demoPdf
-New-Item -ItemType Directory .\.private\paper-library\originals\smoke -Force
-Copy-Item -LiteralPath $demoPdf -Destination .\.private\paper-library\originals\smoke\demo.pdf
+Copy-Item -LiteralPath $demoPdf -Destination (Join-Path .\.private\paper-library ("demo-" + [guid]::NewGuid().ToString("N") + ".pdf"))
 ```
 
 随后通过 React 页面和 Java API 执行以下闭环：
 
-1. 在页面上传一份唯一命名的合成 PDF，确认响应路径位于 `uploads/`，磁盘原件存在，页面
+1. 在页面上传一份唯一命名的合成 PDF，确认响应相对路径仅为文件名，磁盘原件存在，页面
    立即显示“尚未存入知识库”。
-2. 将另一份唯一命名的合成 PDF 复制到 `originals/` 的测试子目录，点击“扫描文件夹”，轮询
+2. 将另一份唯一命名的合成 PDF 直接复制到论文目录，点击“扫描文件夹”，轮询
    `scanId` 到 `SUCCEEDED`，确认新原件出现且未自动创建入库任务。
 3. 分别请求不带筛选、`libraryState=NOT_INGESTED`、`ORIGINAL_MISSING` 和 `INGESTED` 的列表，
    核对每页 `items`、`total` 与分页边界。
 4. 对单篇调用 `POST /api/v1/library/files/{libraryFileId}/ingestion`，等待任务和 Paper 到
    `READY`，确认它进入“已存入知识库”筛选并可在 Chat 中检索与引用。
-5. 将已入库的测试 PDF 移出 `originals/` 后再次扫描，确认行变为 `MISSING`、Paper/chunk/向量
+5. 将已入库的测试 PDF 移出论文目录 后再次扫描，确认行变为 `MISSING`、Paper/chunk/向量
    没有被扫描自动删除，但该 Paper 立即退出 Chat 可检索范围。
 6. 对缺失行调用 `DELETE /api/v1/papers/{paperId}`，确认 Paper、任务、chunk、向量和缺失登记
    被清理。
@@ -315,7 +315,7 @@ docker compose --env-file .\.env -f .\infrastructure\compose.yaml down
 以下代码跳过空行和注释，按第一个 `=` 分割变量，并且不打印值：
 
 ```powershell
-Get-Content -LiteralPath .\.env | ForEach-Object {
+Get-Content -LiteralPath .\.env -Encoding UTF8 | ForEach-Object {
     $line = $_.Trim()
     if (-not $line -or $line.StartsWith('#')) {
         return
@@ -389,7 +389,7 @@ pnpm dev
 
 | 数据 | 默认或配置位置 | 普通 `down` 是否保留 |
 | --- | --- | --- |
-| PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/originals/`；网页上传位于其 `uploads/` 子目录 | 是 |
+| PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/`，手动放入与网页上传共用 | 是 |
 | 上传暂存 | `AIRESEARCHER_PAPER_LIBRARY_DIR/.staging/` | 是 |
 | embedding/reranker | `AIRESEARCHER_MODEL_CACHE_DIR` | 是 |
 | MySQL | `airesearcher_mysql_data` named volume | 是 |
@@ -401,14 +401,28 @@ pnpm dev
 
 ## 8. 从旧 PDF storage 迁移
 
+### 已有 originals 目录的扁平化整理
+
+停止 Agent API 和 Worker 后，将 `paper-library/originals/`（包括其上传子目录）内需要
+保留的 PDF 移到 `paper-library/` 根层。移动前记录相对路径和 SHA-256，遇到重名必须
+改为唯一文件名，不能覆盖目标。核对移动前后 SHA-256 一致后，仅删除已经为空的旧目录。
+测试 PDF 须确认是合成数据才可删除，不能仅凭目录名判断。
+
+重新启动并完成一次扫描，核对原件 ID、Paper 关联和 PDF 预览。扫描会更新原件路径并
+复用既有知识，不自动重新入库；未完成扫描前不要触发入库。保留 `.staging/`，不要把
+类型检查缓存或冒烟备份放入论文目录；开发检查使用工具默认缓存，测试结束后清理本次
+创建的合成文件。历史 `mypy-cache-stage*` 是可再生成的类型检查缓存，不是论文数据。
+
+### 更早的 storage 目录
+
 迁移不会自动移动或删除任何文件，也不会自动清理数据库或向量。开始前必须停止四个应用，
 并分别备份旧 `AIRESEARCHER_STORAGE_DIR`、MySQL 和 Qdrant。
 
 1. 在现有 `.env` 中新增 `AIRESEARCHER_PAPER_LIBRARY_DIR=.private/paper-library`；迁移验证完成前
    保留原 `AIRESEARCHER_STORAGE_DIR`。
 2. 运行 `start-dev.ps1 -CheckOnly`，确认新目录边界与 Git 忽略规则通过。
-3. 正常启动一次，让 Alembic 升级到最新 schema 并创建 `originals/`、`.staging/`。
-4. 使用 `Copy-Item` 把需要保留的旧 PDF 复制到 `originals/` 下自选子目录；不要使用移动或
+3. 正常启动一次，让 Alembic 升级到最新 schema 并创建论文目录及 `.staging/`。
+4. 使用 `Copy-Item` 把需要保留的旧 PDF 复制到论文目录根层；不要使用移动或
    删除命令，也不要复制旧上传临时文件。
 5. 创建并完成一次扫描。扫描会按 SHA-256 把复制原件关联到既有 Paper，不重新创建 Paper、
    入库任务、chunk 或向量。
