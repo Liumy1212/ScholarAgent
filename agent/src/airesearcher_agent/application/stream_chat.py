@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -98,8 +98,9 @@ class StreamChatUseCase:
             paper_ids=command.paper_ids,
         )
         answer_mode: AnswerMode | None = None
+        provider_events = self._provider.stream(prompt)
         try:
-            async for provider_event in self._provider.stream(prompt):
+            async for provider_event in provider_events:
                 if isinstance(provider_event, MessageDelta):
                     yield events.create("message.delta", {"delta": provider_event.delta})
                 elif isinstance(provider_event, Citation):
@@ -160,3 +161,6 @@ class StreamChatUseCase:
                 )
             else:
                 yield events.create("run.completed", {"answerMode": answer_mode})
+        finally:
+            if isinstance(provider_events, AsyncGenerator):
+                await provider_events.aclose()

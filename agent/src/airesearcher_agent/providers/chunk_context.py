@@ -15,9 +15,15 @@ class DeepSeekChunkContextProvider:
         self._url = f"{settings.deepseek_base_url}/chat/completions"
         self._api_key = settings.deepseek_api_key.get_secret_value()
         self._model = settings.deepseek_model
-        self._timeout = settings.deepseek_timeout_seconds
         self._max_chars = settings.chunk_context_max_chars
-        self._transport = transport
+        self._client = httpx.Client(
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(settings.deepseek_timeout_seconds),
+            transport=transport,
+        )
 
     def generate(self, request: ChunkContextRequest) -> str:
         payload = {
@@ -30,15 +36,7 @@ class DeepSeekChunkContextProvider:
             "temperature": 0,
         }
         try:
-            with httpx.Client(
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(self._timeout),
-                transport=self._transport,
-            ) as client:
-                response = client.post(self._url, json=payload)
+            response = self._client.post(self._url, json=payload)
             if not response.is_success:
                 raise ChunkContextError(
                     f"DeepSeek contextualization returned HTTP {response.status_code}"
@@ -63,6 +61,9 @@ class DeepSeekChunkContextProvider:
             raise
         except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError) as error:
             raise ChunkContextError("DeepSeek contextualization failed") from error
+
+    def close(self) -> None:
+        self._client.close()
 
     @staticmethod
     def _request_text(request: ChunkContextRequest) -> str:

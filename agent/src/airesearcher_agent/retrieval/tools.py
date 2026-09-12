@@ -13,7 +13,6 @@ from airesearcher_agent.persistence.repositories import chunks_by_ids, ready_pap
 from airesearcher_agent.retrieval.models import (
     DocumentMatch,
     Evidence,
-    KeywordDocument,
     RankedChunk,
     SearchHit,
 )
@@ -109,11 +108,6 @@ class RetrievalTools:
     ) -> list[RankedChunk]:
         with self._database.session() as session:
             allowed_ids = ready_paper_ids(session, paper_ids)
-            keyword_chunks = session.scalars(
-                select(ChunkRecord)
-                .where(ChunkRecord.paper_id.in_(allowed_ids))
-                .order_by(ChunkRecord.paper_id, ChunkRecord.page, ChunkRecord.ordinal)
-            ).all()
         if not allowed_ids:
             return []
 
@@ -123,17 +117,12 @@ class RetrievalTools:
             ready_paper_ids=allowed_ids,
             limit=self._candidate_count,
         )
-        allowed_chunk_ids = {chunk.id for chunk in keyword_chunks}
-        dense_hits = [hit for hit in dense_hits if hit.chunk_id in allowed_chunk_ids]
         if mode == "hybrid":
             keyword_hits = self._keyword_retriever.search(
                 query=query,
-                documents=[
-                    KeywordDocument(chunk_id=chunk.id, text=chunk.text) for chunk in keyword_chunks
-                ],
+                paper_ids=allowed_ids,
                 limit=self._candidate_count,
             )
-            keyword_hits = [hit for hit in keyword_hits if hit.chunk_id in allowed_chunk_ids]
             hits = self._rrf_fuse(dense_hits, keyword_hits)[: self._candidate_count]
         else:
             hits = dense_hits[: self._candidate_count]

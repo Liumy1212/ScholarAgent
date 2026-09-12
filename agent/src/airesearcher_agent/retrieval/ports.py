@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from airesearcher_agent.retrieval.models import KeywordDocument, SearchHit
+from airesearcher_agent.retrieval.models import SearchHit
 
 
 class EmbeddingProvider(Protocol):
@@ -19,7 +19,7 @@ class KeywordRetriever(Protocol):
         self,
         *,
         query: str,
-        documents: list[KeywordDocument],
+        paper_ids: tuple[str, ...],
         limit: int,
     ) -> list[SearchHit]: ...
 

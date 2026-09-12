@@ -59,6 +59,10 @@ class CompositeWorker:
             self._ingestion_worker = self._ingestion_factory()
         return self._ingestion_worker.run_once()
 
+    def close(self) -> None:
+        if self._ingestion_worker is not None:
+            self._ingestion_worker.close()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AIResearcher leased ingestion worker")
@@ -91,12 +95,16 @@ def main() -> None:
             scan_worker=scan_worker,
             ingestion_factory=lambda: build_ingestion_worker(settings, worker_id=worker_id),
         )
-    if arguments.once:
-        worker.run_once()
-        return
-    while True:
-        if not worker.run_once():
-            time.sleep(settings.worker_poll_seconds)
+    try:
+        if arguments.once:
+            worker.run_once()
+            return
+        while True:
+            if not worker.run_once():
+                time.sleep(settings.worker_poll_seconds)
+    finally:
+        if isinstance(worker, (IngestionWorker, CompositeWorker)):
+            worker.close()
 
 
 if __name__ == "__main__":

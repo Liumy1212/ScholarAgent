@@ -19,6 +19,8 @@ class ChunkContextRequest:
 class ChunkContextProvider(Protocol):
     def generate(self, request: ChunkContextRequest) -> str: ...
 
+    def close(self) -> None: ...
+
 
 def retrieval_text(
     *,

@@ -4,6 +4,7 @@ import dev.airesearcher.backend.common.api.Result;
 import dev.airesearcher.backend.common.api.ResultCode;
 import dev.airesearcher.backend.common.request.RequestIds;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.util.List;
 
@@ -24,6 +26,15 @@ import java.util.List;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleDisconnectedClient(
+            AsyncRequestNotUsableException exception,
+            HttpServletResponse response
+    ) {
+        // The async response is unusable; writing a JSON error would fail again.
+        log.debug("Client disconnected from async response: {}", exception.getMessage());
+    }
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Object> handleApiException(

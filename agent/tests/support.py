@@ -5,7 +5,7 @@ from airesearcher_agent.config import Settings
 from airesearcher_agent.ingestion.context import ChunkContextError, ChunkContextRequest
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import Base
-from airesearcher_agent.retrieval.models import KeywordDocument, SearchHit
+from airesearcher_agent.retrieval.models import SearchHit
 
 
 def runtime_settings(runtime_root: Path, **overrides: Any) -> Settings:
@@ -117,6 +117,7 @@ class DeterministicEmbedding:
 class DeterministicChunkContext:
     def __init__(self, *, fail_calls: int = 0) -> None:
         self.calls: list[ChunkContextRequest] = []
+        self.close_calls = 0
         self._fail_calls = fail_calls
 
     def generate(self, request: ChunkContextRequest) -> str:
@@ -126,6 +127,9 @@ class DeterministicChunkContext:
             raise ChunkContextError("synthetic contextualization failure")
         section = " > ".join(request.section_path) or "论文正文"
         return f"该片段位于{section}，用于说明当前论文内容。"
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class FixedReranker:
@@ -141,14 +145,14 @@ class FixedReranker:
 class RecordingKeywordRetriever:
     def __init__(self, hits: list[SearchHit] | None = None) -> None:
         self.hits = list(hits or [])
-        self.calls: list[tuple[str, list[KeywordDocument], int]] = []
+        self.calls: list[tuple[str, tuple[str, ...], int]] = []
 
     def search(
         self,
         *,
         query: str,
-        documents: list[KeywordDocument],
+        paper_ids: tuple[str, ...],
         limit: int,
     ) -> list[SearchHit]:
-        self.calls.append((query, list(documents), limit))
+        self.calls.append((query, paper_ids, limit))
         return self.hits[:limit]

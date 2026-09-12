@@ -1,9 +1,10 @@
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, aliased
 
-from airesearcher_agent.domain.chat import AnswerMode, ChatPrompt
+from airesearcher_agent.domain.chat import AnswerMode, ChatPrompt, HistoryTurn
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import (
     AgentRunRecord,
@@ -20,9 +21,32 @@ class AgentRunStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    def start(self, prompt: ChatPrompt, *, model_name: str) -> None:
+    def read_history(self, session: Session, prompt: ChatPrompt) -> tuple[HistoryTurn, ...]:
+        user = aliased(MessageRecord)
+        assistant = aliased(MessageRecord)
+        rows = session.execute(
+            select(user.content, assistant.content)
+            .select_from(AgentRunRecord)
+            .join(user, AgentRunRecord.user_message_id == user.id)
+            .join(assistant, AgentRunRecord.assistant_message_id == assistant.id)
+            .where(
+                AgentRunRecord.conversation_id == prompt.conversation_id,
+                AgentRunRecord.status == "COMPLETED",
+                AgentRunRecord.id != prompt.run_id,
+                user.conversation_id == prompt.conversation_id,
+                assistant.conversation_id == prompt.conversation_id,
+                user.role == "user",
+                assistant.role == "assistant",
+            )
+            .order_by(AgentRunRecord.created_at.desc(), AgentRunRecord.id.desc())
+            .limit(10)
+        ).all()
+        return tuple(HistoryTurn(row[0], row[1]) for row in reversed(rows))
+
+    def start(self, prompt: ChatPrompt, *, model_name: str) -> tuple[HistoryTurn, ...]:
         now = utc_now()
         with self._database.transaction() as session:
+            history = self.read_history(session, prompt)
             conversation = session.get(ConversationRecord, prompt.conversation_id)
             if conversation is None:
                 session.add(ConversationRecord(id=prompt.conversation_id, created_at=now))
@@ -54,6 +78,8 @@ class AgentRunStore:
                     completed_at=None,
                 )
             )
+
+        return history
 
     def start_tool_call(
         self,

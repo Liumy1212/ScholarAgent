@@ -5,6 +5,10 @@ AIResearcher 的 React 19 浏览器客户端。当前提供统一原件清单、
 状态、SSE 回答和页码引用。兼容性的排除/恢复请求封装仍保留，但知识库页面不再将其作为
 删除流程。
 
+入口和测试环境加载官方 `@ant-design/v5-patch-for-react-19`，兼容 Ant Design 5 在
+React 19 下的按钮波纹与静态反馈组件。会话生命周期与历史窗口见
+[当前页面多轮会话](../docs/architecture.md#当前页面多轮会话)。
+
 浏览器只调用 Java 的 `/api/v1/**`，不读取本地目录；页面展示 Agent 经 Java 返回的实际
 `originalsPath`。Chat 只列出 `searchable=true` 的论文，浏览器不提供原件硬删除。完整三端验收状态见
 [路线图阶段 1.4](../docs/roadmap.md)。

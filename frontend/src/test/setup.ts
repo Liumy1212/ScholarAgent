@@ -1,3 +1,4 @@
+import '@ant-design/v5-patch-for-react-19';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 

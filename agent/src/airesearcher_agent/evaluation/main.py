@@ -34,7 +34,7 @@ def main() -> None:
         tools = RetrievalTools(
             database=database,
             embedding=BgeM3EmbeddingProvider(settings),
-            keyword_retriever=Bm25KeywordRetriever(),
+            keyword_retriever=Bm25KeywordRetriever(database),
             reranker=BgeReranker(settings),
             vector_store=QdrantVectorStore.from_settings(settings),
             settings=settings,

@@ -258,11 +258,7 @@ def test_knowledge_search_fuses_dense_and_keyword_candidates_before_reranking(
         citation_namespace="hybrid-run",
     )
 
-    assert [document.chunk_id for document in keywords.calls[0][1]] == [
-        "chunk-dense",
-        "chunk-both",
-        "chunk-keyword",
-    ]
+    assert keywords.calls[0][1] == ("paper-hybrid",)
     assert reranker.calls[0][1] == [
         "Shared candidate.",
         "Semantic dense match.",

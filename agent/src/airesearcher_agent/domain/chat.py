@@ -5,6 +5,12 @@ type AnswerMode = Literal["KNOWLEDGE_BASE", "DOCUMENT_LOOKUP", "MODEL_KNOWLEDGE"
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryTurn:
+    user_content: str
+    assistant_content: str
+
+
+@dataclass(frozen=True, slots=True)
 class ChatPrompt:
     run_id: str
     conversation_id: str

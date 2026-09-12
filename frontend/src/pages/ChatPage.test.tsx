@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatPage } from './ChatPage';
 
@@ -31,7 +31,7 @@ function envelope(
     eventId,
     requestId,
     runId: 'run-component-001',
-    conversationId: 'single-paper-demo',
+    conversationId: 'replaced-by-request-path',
     assistantMessageId: 'msg-component-001',
     sequence,
     timestamp: `2026-01-01T00:00:0${sequence}Z`,
@@ -39,7 +39,9 @@ function envelope(
   };
 }
 
-function wire(event: ReturnType<typeof envelope>): string {
+function wire(event: ReturnType<typeof envelope>, path: RequestInfo | URL): string {
+  event.conversationId = String(path).split('/')[4] ?? '';
+
   return `event: ${event.type}\nid: ${event.eventId}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
@@ -95,9 +97,7 @@ describe('ChatPage', () => {
         if (String(input) === '/api/v1/papers') {
           return paperListResponse(init, true);
         }
-        expect(String(input)).toBe(
-          '/api/v1/conversations/single-paper-demo/messages/stream',
-        );
+        expect(String(input)).toMatch(/^\/api\/v1\/conversations\/[0-9a-f-]{36}\/messages\/stream$/);
         expect(init?.method).toBe('POST');
         const headers = new Headers(init?.headers);
         capturedRequestId = headers.get('X-Request-Id') ?? '';
@@ -148,7 +148,7 @@ describe('ChatPage', () => {
           ),
         ];
 
-        return new Response(responseStream(events.map(wire).join('')), {
+        return new Response(responseStream(events.map((event) => wire(event, input)).join('')), {
           status: 200,
           headers: {
             'Content-Type': 'text/event-stream; charset=utf-8',
@@ -167,6 +167,7 @@ describe('ChatPage', () => {
     fireEvent.change(screen.getByLabelText('研究问题'), {
       target: { value: '请给出合成回答' },
     });
+    await waitFor(() => expect(screen.getByRole('button', { name: '开始生成' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
     expect(await screen.findByText('回答生成完成')).toBeTruthy();
@@ -215,6 +216,7 @@ describe('ChatPage', () => {
     fireEvent.change(screen.getByLabelText('研究问题'), {
       target: { value: '失败场景' },
     });
+    await waitFor(() => expect(screen.getByRole('button', { name: '开始生成' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
     expect(await screen.findByText('请求内容无效')).toBeTruthy();
@@ -240,7 +242,7 @@ describe('ChatPage', () => {
             delta: '尚未完成的回答',
           }),
         ]
-          .map(wire)
+          .map((event) => wire(event, input))
           .join('');
 
         return new Response(responseStream(partialStream), {
@@ -257,6 +259,7 @@ describe('ChatPage', () => {
     fireEvent.change(screen.getByLabelText('研究问题'), {
       target: { value: '中断场景' },
     });
+    await waitFor(() => expect(screen.getByRole('button', { name: '开始生成' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
     expect(await screen.findByText('本次生成已中断')).toBeTruthy();
@@ -281,4 +284,86 @@ describe('ChatPage', () => {
     expect(screen.getByText('检索全部可检索论文')).toBeTruthy();
     expect(screen.queryByText('Synthetic Research Paper')).toBeNull();
   });
+});
+
+
+async function ask(question: string) {
+  fireEvent.change(screen.getByLabelText('研究问题'), { target: { value: question } });
+  await waitFor(() => expect(screen.getByRole('button', { name: '开始生成' }).hasAttribute('disabled')).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+}
+
+it('保留多轮问答，新建、切换范围和重新进入均隔离会话', async () => {
+  const paths: string[] = [];
+  const bodies: object[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
+    paths.push(String(input));
+    bodies.push(JSON.parse(String(init?.body)) as object);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    const events = [
+      envelope(requestId, 'run.started', 'evt-start', 0, {}),
+      envelope(requestId, 'message.delta', 'evt-answer', 1, { delta: `回答第${paths.length}轮` }),
+      envelope(requestId, 'run.completed', 'evt-done', 2, { answerMode: 'MODEL_KNOWLEDGE' }),
+    ];
+    return new Response(responseStream(events.map((event) => wire(event, input)).join('')), {
+      headers: { 'Content-Type': 'text/event-stream', 'X-Request-Id': requestId },
+    });
+  }));
+  const page = render(<ChatPage />);
+  await ask('介绍方法');
+  await screen.findByText('回答第1轮');
+  await ask('它有什么限制');
+  await screen.findByText('回答第2轮');
+  expect(screen.getByText('介绍方法')).toBeTruthy();
+  expect(screen.getByText('回答第1轮')).toBeTruthy();
+  expect(paths[1]).toBe(paths[0]);
+  fireEvent.change(screen.getByLabelText('研究问题'), { target: { value: '未发送草稿' } });
+  fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+  expect(screen.queryByText('回答第1轮')).toBeNull();
+  expect((screen.getByLabelText('研究问题') as HTMLTextAreaElement).value).toBe('');
+  await ask('新话题');
+  await screen.findByText('回答第3轮');
+  expect(paths[2]).not.toBe(paths[1]);
+  expect(bodies[2]).toEqual({ content: '新话题', paperIds: ['paper-component-001'] });
+  const clear = page.container.querySelector('.ant-select-clear');
+  expect(clear).not.toBeNull();
+  fireEvent.mouseDown(clear!);
+  expect(screen.queryByText('回答第3轮')).toBeNull();
+  await ask('全部论文');
+  await screen.findByText('回答第4轮');
+  expect(paths[3]).not.toBe(paths[2]);
+  expect(bodies[3]).toEqual({ content: '全部论文', paperIds: [] });
+  page.unmount();
+  render(<ChatPage />);
+  await ask('重新进入');
+  await screen.findByText('回答第5轮');
+  expect(paths[4]).not.toBe(paths[3]);
+  expect(screen.queryByText('回答第4轮')).toBeNull();
+});
+
+it('生成中禁用会话操作，停止后可继续，卸载取消待处理请求', async () => {
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
+    const signal = init?.signal;
+    if (!signal) throw new Error('missing signal');
+    signals.push(signal);
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  }));
+  const page = render(<ChatPage />);
+  await ask('等待模型');
+  await waitFor(() => expect(signals).toHaveLength(1));
+  expect(screen.getByRole('button', { name: '新建会话' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('combobox', { name: '检索范围' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('button', { name: /开始生成/ }).hasAttribute('disabled')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '停止生成' }));
+  await screen.findByText('本次生成已中断');
+  expect(signals[0]?.aborted).toBe(true);
+  await ask('继续');
+  await waitFor(() => expect(signals).toHaveLength(2));
+  await act(async () => page.unmount());
+  expect(signals[1]?.aborted).toBe(true);
 });

@@ -1,7 +1,9 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Event, Lock, Thread
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -56,6 +58,54 @@ class IngestionSource:
     file_size_bytes: int
 
 
+def _heartbeat_interval_seconds(lease_seconds: int) -> float:
+    return lease_seconds / 3
+
+
+class _LeaseHeartbeat:
+    def __init__(
+        self,
+        *,
+        renew: Callable[[], None],
+        interval_seconds: float,
+        job_id: str,
+    ) -> None:
+        self._renew = renew
+        self._interval_seconds = interval_seconds
+        self._job_id = job_id
+        self._stop = Event()
+        self._failure_lock = Lock()
+        self._failure: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"ingestion-lease-{job_id[:16]}",
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    def raise_if_failed(self) -> None:
+        with self._failure_lock:
+            failure = self._failure
+        if failure is not None:
+            raise LeaseLostError from failure
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                self._renew()
+            except BaseException as error:
+                logger.exception("Could not renew lease for ingestion job %s", self._job_id)
+                with self._failure_lock:
+                    self._failure = error
+                self._stop.set()
+                return
+
+
 class IngestionWorker:
     def __init__(
         self,
@@ -83,6 +133,9 @@ class IngestionWorker:
             return False
         self._process(claimed)
         return True
+
+    def close(self) -> None:
+        self._context_provider.close()
 
     def recover_expired_leases(self) -> int:
         now = utc_now()
@@ -159,31 +212,49 @@ class IngestionWorker:
             return ClaimedJob(job_id=job.id, paper_id=job.paper_id, worker_id=self._worker_id)
 
     def _process(self, claimed: ClaimedJob) -> None:
+        heartbeat = _LeaseHeartbeat(
+            renew=lambda: self._renew_claim(claimed),
+            interval_seconds=_heartbeat_interval_seconds(self._lease_seconds),
+            job_id=claimed.job_id,
+        )
         try:
-            source = self._paper_source(claimed)
-            parsed = self._parser.parse(paper_id=claimed.paper_id, path=source.path)
-            self._verify_source(source)
-            self._set_stage(claimed, IngestionStage.CHUNKING)
-            parsed = self._contextualize(claimed, parsed)
-            self._verify_source(source)
-            self._store_chunks(claimed, parsed)
-            self._set_stage(claimed, IngestionStage.EMBEDDING)
-            vectors = self._embedding.encode([chunk.text for chunk in parsed.chunks])
-            if len(vectors) != len(parsed.chunks):
-                raise RuntimeError("embedding provider returned an unexpected vector count")
-            self._set_stage(claimed, IngestionStage.INDEXING)
-            self._verify_source(source)
-            self._vector_store.delete_paper(claimed.paper_id)
-            self._vector_store.upsert_chunks(
-                paper_id=claimed.paper_id,
-                title=parsed.title or self._paper_title(claimed.paper_id),
-                chunks=[
-                    (chunk.chunk_id, chunk.vector_id, chunk.page, chunk.quote)
-                    for chunk in parsed.chunks
-                ],
-                vectors=vectors,
-            )
-            self._verify_source(source)
+            heartbeat.start()
+            try:
+                source = self._paper_source(claimed)
+                self._checkpoint(claimed, heartbeat)
+                parsed = self._parser.parse(paper_id=claimed.paper_id, path=source.path)
+                self._checkpoint(claimed, heartbeat)
+                self._verify_source(source)
+                self._set_stage(claimed, IngestionStage.CHUNKING)
+                parsed = self._contextualize(claimed, parsed)
+                self._checkpoint(claimed, heartbeat)
+                self._verify_source(source)
+                self._store_chunks(claimed, parsed)
+                self._set_stage(claimed, IngestionStage.EMBEDDING)
+                self._checkpoint(claimed, heartbeat)
+                vectors = self._embedding.encode([chunk.text for chunk in parsed.chunks])
+                self._checkpoint(claimed, heartbeat)
+                if len(vectors) != len(parsed.chunks):
+                    raise RuntimeError("embedding provider returned an unexpected vector count")
+                self._set_stage(claimed, IngestionStage.INDEXING)
+                self._verify_source(source)
+                self._checkpoint(claimed, heartbeat)
+                self._vector_store.delete_paper(claimed.paper_id)
+                self._checkpoint(claimed, heartbeat)
+                self._vector_store.upsert_chunks(
+                    paper_id=claimed.paper_id,
+                    title=parsed.title or self._paper_title(claimed.paper_id),
+                    chunks=[
+                        (chunk.chunk_id, chunk.vector_id, chunk.page, chunk.quote)
+                        for chunk in parsed.chunks
+                    ],
+                    vectors=vectors,
+                )
+                self._checkpoint(claimed, heartbeat)
+                self._verify_source(source)
+            finally:
+                heartbeat.stop()
+            heartbeat.raise_if_failed()
             self._complete(claimed)
         except LeaseLostError:
             logger.warning("Worker lease was lost for ingestion job %s", claimed.job_id)
@@ -377,6 +448,18 @@ class IngestionWorker:
             job.stage = stage.value
             self._renew(job, now)
 
+    def _checkpoint(self, claimed: ClaimedJob, heartbeat: _LeaseHeartbeat) -> None:
+        heartbeat.raise_if_failed()
+        with self._database.transaction() as session:
+            self._locked_job(session, claimed, utc_now())
+        heartbeat.raise_if_failed()
+
+    def _renew_claim(self, claimed: ClaimedJob) -> None:
+        now = utc_now()
+        with self._database.transaction() as session:
+            job = self._locked_job(session, claimed, now)
+            self._renew(job, now)
+
     def _complete(self, claimed: ClaimedJob) -> None:
         now = utc_now()
         with self._database.transaction() as session:
@@ -398,10 +481,8 @@ class IngestionWorker:
         now = utc_now()
         try:
             with self._database.transaction() as session:
-                job = session.get(IngestionJobRecord, claimed.job_id, with_for_update=True)
-                if job is None or job.status != IngestionJobStatus.RUNNING.value:
-                    return
-                if job.lease_owner != claimed.worker_id:
+                job = self._find_locked_job(session, claimed, now)
+                if job is None:
                     return
                 paper = session.get(PaperRecord, claimed.paper_id)
                 if paper is None:
@@ -426,17 +507,42 @@ class IngestionWorker:
         session: Session,
         claimed: ClaimedJob,
     ) -> tuple[IngestionJobRecord, PaperRecord]:
-        job = session.get(IngestionJobRecord, claimed.job_id, with_for_update=True)
-        if (
-            job is None
-            or job.status != IngestionJobStatus.RUNNING.value
-            or job.lease_owner != claimed.worker_id
-        ):
-            raise LeaseLostError
+        job = self._locked_job(session, claimed, utc_now())
         paper = session.get(PaperRecord, claimed.paper_id)
         if paper is None:
             raise RuntimeError("claimed job references a missing paper")
         return job, paper
+
+    def _locked_job(
+        self,
+        session: Session,
+        claimed: ClaimedJob,
+        now: datetime,
+    ) -> IngestionJobRecord:
+        job = self._find_locked_job(session, claimed, now)
+        if job is None:
+            raise LeaseLostError
+        return job
+
+    @staticmethod
+    def _find_locked_job(
+        session: Session,
+        claimed: ClaimedJob,
+        now: datetime,
+    ) -> IngestionJobRecord | None:
+        return session.scalars(
+            select(IngestionJobRecord)
+            .where(
+                IngestionJobRecord.id == claimed.job_id,
+                IngestionJobRecord.paper_id == claimed.paper_id,
+                IngestionJobRecord.status == IngestionJobStatus.RUNNING.value,
+                IngestionJobRecord.lease_owner == claimed.worker_id,
+                IngestionJobRecord.lease_expires_at.is_not(None),
+                IngestionJobRecord.lease_expires_at > now,
+            )
+            .with_for_update()
+            .limit(1)
+        ).first()
 
     def _renew(self, job: IngestionJobRecord, now: datetime) -> None:
         job.lease_expires_at = now + timedelta(seconds=self._lease_seconds)

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -403,3 +404,91 @@ def test_forged_citation_is_removed_and_answer_is_downgraded(tmp_path: Path) -> 
     assert [event.answer_mode for event in events if isinstance(event, AnswerCompleted)] == [
         "MODEL_KNOWLEDGE"
     ]
+
+
+def test_follow_up_uses_persisted_history_and_only_current_evidence(tmp_path: Path) -> None:
+    class FollowUpGateway(ScriptedGateway):
+        async def complete_with_tools(
+            self, messages: list[ChatMessage], tools: list[ToolDefinition]
+        ) -> AssistantTurn:
+            if len(self.complete_messages) == 2:
+                assert [item["role"] for item in messages] == [
+                    "system",
+                    "user",
+                    "assistant",
+                    "user",
+                ]
+                first = json.loads(cast(str, messages[1]["content"]))
+                current = json.loads(cast(str, messages[3]["content"]))
+                assert first["question"] == "介绍方法"
+                assert current == {"question": "它有什么限制", "selectedPaperIds": ["paper-ready"]}
+                assert "合成校准方法" in cast(str, messages[2]["content"])
+                assert CITATION_ID not in json.dumps(messages)
+            return await super().complete_with_tools(messages, tools)
+
+    class FreshEvidenceTools(RecordingRetrievalTools):
+        def knowledge_base_search(
+            self, arguments: KnowledgeBaseSearchArgs, *, citation_namespace: str
+        ) -> list[Evidence]:
+            evidence = super().knowledge_base_search(
+                arguments, citation_namespace=citation_namespace
+            )
+            if len(self.search_calls) == 2:
+                return [
+                    replace(
+                        evidence[0],
+                        citation_id=FORGED_CITATION_ID,
+                        quote="The synthetic calibration method requires clean inputs.",
+                    )
+                ]
+            return evidence
+
+    gateway = FollowUpGateway(
+        [
+            AssistantTurn(
+                tool_calls=[_tool_call("knowledge_base_search", '{"query":"合成校准方法"}')]
+            ),
+            AssistantTurn(content=f"合成校准方法用于校准。[[citation:{CITATION_ID}]]"),
+            AssistantTurn(
+                tool_calls=[_tool_call("knowledge_base_search", '{"query":"合成校准方法的限制"}')]
+            ),
+            AssistantTurn(
+                content=f"限制。[[citation:{FORGED_CITATION_ID}]] [[citation:{CITATION_ID}]]"
+            ),
+        ],
+        [],
+    )
+    tools = FreshEvidenceTools()
+    provider, _ = _provider(tmp_path, gateway, tools)
+    first = replace(_prompt("first"), content="介绍方法")
+    asyncio.run(_collect(provider, first))
+    second = replace(
+        _prompt("second"), conversation_id=first.conversation_id, content="它有什么限制"
+    )
+    events = asyncio.run(_collect(provider, second))
+    assert len(tools.search_calls) == 2
+    assert tools.search_calls[1][0].query == "合成校准方法的限制"
+    assert [event.citation_id for event in events if isinstance(event, Citation)] == [
+        FORGED_CITATION_ID
+    ]
+    assert CITATION_ID not in "".join(
+        event.delta for event in events if isinstance(event, MessageDelta)
+    )
+
+
+def test_history_database_failure_is_reported_without_calling_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    gateway = ScriptedGateway([], [])
+    provider, _ = _provider(tmp_path, gateway, RecordingRetrievalTools())
+
+    def fail_read(*args: object) -> None:
+        raise SQLAlchemyError("synthetic failure")
+
+    monkeypatch.setattr(AgentRunStore, "read_history", fail_read)
+    with pytest.raises(ChatProviderError) as caught:
+        asyncio.run(_collect(provider, _prompt()))
+    assert caught.value.code == "DATABASE_UNAVAILABLE"
+    assert not gateway.complete_messages

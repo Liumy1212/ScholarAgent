@@ -1,6 +1,7 @@
 import hashlib
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import func, select
@@ -490,3 +491,29 @@ def test_composite_worker_does_not_build_ingestion_models_for_scan(tmp_path: Pat
 
     assert composite.run_once() is True
     assert ingestion_built is False
+    composite.close()
+    assert ingestion_built is False
+
+
+def test_composite_worker_closes_a_loaded_ingestion_worker(tmp_path: Path) -> None:
+    class RecordingIngestionWorker:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def run_once(self) -> bool:
+            return False
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    _database, _library_files, _scans, scan_worker = _services(tmp_path)
+    ingestion_worker = RecordingIngestionWorker()
+    composite = CompositeWorker(
+        scan_worker=scan_worker,
+        ingestion_factory=lambda: cast(IngestionWorker, ingestion_worker),
+    )
+
+    assert composite.run_once() is False
+    composite.close()
+
+    assert ingestion_worker.close_calls == 1

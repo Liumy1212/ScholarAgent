@@ -19,7 +19,7 @@ from airesearcher_agent.api.models import (
     PaperUploadResponse,
 )
 from airesearcher_agent.api.pdf import pdf_file_response
-from airesearcher_agent.api.sse import encode_sse
+from airesearcher_agent.api.sse import ChatStreamingResponse, encode_sse
 from airesearcher_agent.application.errors import AgentError, ErrorDetail
 from airesearcher_agent.application.library_files import LibraryFileService
 from airesearcher_agent.application.library_lifecycle import LibraryLifecycleService
@@ -304,7 +304,7 @@ def create_agent_router(
             content=body.content,
             paper_ids=tuple(body.paper_ids),
         )
-        return StreamingResponse(
+        return ChatStreamingResponse(
             encode_sse(stream_use_case.execute(command)),
             media_type="text/event-stream",
             headers={

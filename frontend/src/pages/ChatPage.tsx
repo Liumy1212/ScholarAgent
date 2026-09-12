@@ -37,7 +37,11 @@ import {
   type Citation,
 } from '../chat/chatState';
 
-const CONVERSATION_ID = 'single-paper-demo';
+interface ChatTurn {
+  id: string;
+  question: string;
+  state: ChatState;
+}
 
 const STATUS_PRESENTATION: Record<
   ChatStatus,
@@ -146,50 +150,12 @@ function paperLoadError(error: unknown): string {
   return error instanceof Error ? error.message : '无法读取论文列表。';
 }
 
-export function ChatPage() {
-  const [draft, setDraft] = useState('');
-  const [state, setState] = useState<ChatState>(initialChatState);
-  const [readyPapers, setReadyPapers] = useState<Paper[]>([]);
-  const [selectedPaperId, setSelectedPaperId] = useState<string | undefined>();
-  const [paperLoading, setPaperLoading] = useState(true);
-  const [paperError, setPaperError] = useState<string | null>(null);
-  const controllerRef = useRef<AbortController | null>(null);
+function ConversationTurn({ question, state }: { question: string; state: ChatState }) {
   const active = isActive(state);
   const statusPresentation = STATUS_PRESENTATION[state.status];
-  const canSubmit = draft.trim().length > 0 && !active;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void listPapers(controller.signal)
-      .then((result) => {
-        const ready = result.items.filter((paper) => paper.searchable);
-        setReadyPapers(ready);
-        setSelectedPaperId((current) =>
-          current && ready.some((paper) => paper.paperId === current)
-            ? current
-            : ready[0]?.paperId,
-        );
-        setPaperError(null);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          setPaperError(paperLoadError(error));
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setPaperLoading(false);
-        }
-      });
-    return () => controller.abort();
-  }, []);
-
   const requestLabel = useMemo(
     () => (state.requestId ? `请求 ID：${state.requestId}` : '尚未发起请求'),
     [state.requestId],
-  );
-  const selectedPaper = readyPapers.find(
-    (paper) => paper.paperId === selectedPaperId,
   );
   const latestTools = useMemo(() => {
     const tools = new Map<string, ChatState['tools'][number]>();
@@ -199,164 +165,10 @@ export function ChatPage() {
     return [...tools.values()];
   }, [state.tools]);
 
-  const submit = async () => {
-    const content = draft.trim();
-    if (!content || controllerRef.current) {
-      return;
-    }
-
-    const requestId = createRequestId();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    let currentState = startChatRequest(requestId, CONVERSATION_ID);
-    let streamOpened = false;
-    setState(currentState);
-
-    try {
-      await streamChat({
-        conversationId: CONVERSATION_ID,
-        requestId,
-        content,
-        paperIds: selectedPaperId ? [selectedPaperId] : [],
-        signal: controller.signal,
-        onOpen: (responseRequestId) => {
-          streamOpened = true;
-          currentState = confirmStreamOpened(currentState, responseRequestId);
-          setState(currentState);
-        },
-        onEvent: (event) => {
-          currentState = applyChatEvent(currentState, event);
-          setState(currentState);
-        },
-      });
-      currentState = markStreamEnded(currentState);
-      setState(currentState);
-    } catch (error) {
-      if (controller.signal.aborted) {
-        currentState = markStreamInterrupted(
-          currentState,
-          '你已停止本次生成。重新发送问题会创建一个新的请求。',
-          'USER_ABORTED',
-        );
-      } else if (error instanceof StreamOpenErrorResponse) {
-        currentState = markOpenFailed(
-          currentState,
-          {
-            code: error.response.code,
-            message: error.response.message,
-            retryable: error.response.retryable,
-          },
-          error.response.requestId,
-        );
-      } else if (error instanceof ChatTransportError) {
-        currentState = streamOpened
-          ? markStreamInterrupted(currentState, error.message, error.code)
-          : markOpenFailed(currentState, {
-              code: error.code,
-              message: error.message,
-              retryable: error.retryable,
-            });
-      } else if (error instanceof SseProtocolError) {
-        currentState = markStreamProtocolViolation(
-          currentState,
-          `流式响应不符合 SSE v1 契约：${error.message}`,
-        );
-      } else {
-        const message = error instanceof Error ? error.message : '未知网络错误';
-        currentState = streamOpened
-          ? markStreamInterrupted(currentState, message)
-          : markOpenFailed(currentState, {
-              code: 'REQUEST_FAILED',
-              message: `无法建立流式连接：${message}`,
-              retryable: true,
-            });
-      }
-      setState(currentState);
-    } finally {
-      if (controllerRef.current === controller) {
-        controllerRef.current = null;
-      }
-    }
-  };
-
-  const stop = () => {
-    controllerRef.current?.abort(new DOMException('用户停止生成', 'AbortError'));
-  };
-
   return (
-    <main className="page-shell" aria-labelledby="chat-title">
-      <Space direction="vertical" size={24} className="full-width">
-        <div>
-          <Tag color={selectedPaper ? 'geekblue' : 'default'}>
-            {selectedPaper ? selectedPaper.title : '全部可检索论文'}
-          </Tag>
-          <Typography.Title id="chat-title" level={2}>
-            论文问答
-          </Typography.Title>
-          <Typography.Paragraph type="secondary">
-            DeepSeek 通过原生 Tool Calling 选择只读工具，正文与可验证引用由 SSE 返回。
-          </Typography.Paragraph>
-        </div>
-
-        <Card className="surface-card">
-          <Form layout="vertical" onFinish={() => void submit()}>
-            <Form.Item label="检索范围">
-              <Select
-                aria-label="检索范围"
-                loading={paperLoading}
-                allowClear
-                disabled={active}
-                value={selectedPaperId}
-                placeholder="全部可检索论文"
-                options={readyPapers.map((paper) => ({
-                  value: paper.paperId,
-                  label: `${paper.title}${paper.pageCount ? ` · ${paper.pageCount} 页` : ''}`,
-                }))}
-                onChange={(value: string | undefined) => setSelectedPaperId(value)}
-              />
-              {paperError ? (
-                <Alert className="field-alert" type="warning" showIcon message={paperError} />
-              ) : null}
-              {!paperLoading && readyPapers.length === 0 ? (
-                <Alert
-                  className="field-alert"
-                  type="info"
-                  showIcon
-                  message="知识库中还没有可检索论文；此时只能得到模型知识回答。"
-                />
-              ) : null}
-            </Form.Item>
-            <Form.Item label="研究问题" required>
-              <Input.TextArea
-                aria-label="研究问题"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                autoSize={{ minRows: 4, maxRows: 10 }}
-                placeholder="例如：论文第二页报告的实验提升是多少？请给出引用。"
-                disabled={active}
-              />
-            </Form.Item>
-            <Flex gap={12} wrap align="center">
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={state.status === 'connecting'}
-                disabled={!canSubmit}
-              >
-                开始生成
-              </Button>
-              {active ? (
-                <Button danger onClick={stop}>
-                  停止生成
-                </Button>
-              ) : null}
-              <Typography.Text type="secondary">
-                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : '检索全部可检索论文'}
-              </Typography.Text>
-            </Flex>
-          </Form>
-        </Card>
-
+    <section aria-label={`问答：${question}`}>
+      <Space direction="vertical" size={16} className="full-width">
+        <Card title="你的问题"><Typography.Paragraph>{question}</Typography.Paragraph></Card>
         <Card
           className="surface-card"
           title="回答（模型生成）"
@@ -458,6 +270,250 @@ export function ChatPage() {
             />
           )}
         </Card>
+      </Space>
+    </section>
+  );
+}
+
+export function ChatPage() {
+  const [draft, setDraft] = useState('');
+  const [conversationId, setConversationId] = useState(() => crypto.randomUUID());
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [pending, setPending] = useState(false);
+  const state = turns.at(-1)?.state ?? initialChatState;
+  const [readyPapers, setReadyPapers] = useState<Paper[]>([]);
+  const [selectedPaperId, setSelectedPaperId] = useState<string | undefined>();
+  const [paperLoading, setPaperLoading] = useState(true);
+  const [paperError, setPaperError] = useState<string | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+  const active = pending || isActive(state);
+  const canSubmit = draft.trim().length > 0 && !active && !paperLoading;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void listPapers(controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        const ready = result.items.filter((paper) => paper.searchable);
+        setReadyPapers(ready);
+        setSelectedPaperId((current) =>
+          current && ready.some((paper) => paper.paperId === current)
+            ? current
+            : ready[0]?.paperId,
+        );
+        setPaperError(null);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setPaperError(paperLoadError(error));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setPaperLoading(false);
+        }
+      });
+    return () => {
+      controller.abort();
+      const pending = controllerRef.current;
+      controllerRef.current = null;
+      pending?.abort();
+    };
+  }, []);
+
+  const selectedPaper = readyPapers.find(
+    (paper) => paper.paperId === selectedPaperId,
+  );
+
+  const submit = async () => {
+    const content = draft.trim();
+    if (!content || paperLoading || controllerRef.current) {
+      return;
+    }
+
+    const requestId = createRequestId();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setPending(true);
+    let currentState = startChatRequest(requestId, conversationId);
+    let streamOpened = false;
+    setDraft('');
+    const initialState = currentState;
+    setTurns((previous) => [...previous, { id: requestId, question: content, state: initialState }]);
+    const publish = () => {
+      if (controllerRef.current !== controller) return;
+      const snapshot = currentState;
+      setTurns((previous) => previous.map((turn) =>
+        turn.id === requestId ? { ...turn, state: snapshot } : turn,
+      ));
+    };
+    publish();
+
+    try {
+      await streamChat({
+        conversationId,
+        requestId,
+        content,
+        paperIds: selectedPaperId ? [selectedPaperId] : [],
+        signal: controller.signal,
+        onOpen: (responseRequestId) => {
+          if (controllerRef.current !== controller || controller.signal.aborted) return;
+          streamOpened = true;
+          currentState = confirmStreamOpened(currentState, responseRequestId);
+          publish();
+        },
+        onEvent: (event) => {
+          if (controllerRef.current !== controller || controller.signal.aborted) return;
+          currentState = applyChatEvent(currentState, event);
+          publish();
+        },
+      });
+      currentState = markStreamEnded(currentState);
+      publish();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        currentState = markStreamInterrupted(
+          currentState,
+          '你已停止本次生成。重新发送问题会创建一个新的请求。',
+          'USER_ABORTED',
+        );
+      } else if (error instanceof StreamOpenErrorResponse) {
+        currentState = markOpenFailed(
+          currentState,
+          {
+            code: error.response.code,
+            message: error.response.message,
+            retryable: error.response.retryable,
+          },
+          error.response.requestId,
+        );
+      } else if (error instanceof ChatTransportError) {
+        currentState = streamOpened
+          ? markStreamInterrupted(currentState, error.message, error.code)
+          : markOpenFailed(currentState, {
+              code: error.code,
+              message: error.message,
+              retryable: error.retryable,
+            });
+      } else if (error instanceof SseProtocolError) {
+        currentState = markStreamProtocolViolation(
+          currentState,
+          `流式响应不符合 SSE v1 契约：${error.message}`,
+        );
+      } else {
+        const message = error instanceof Error ? error.message : '未知网络错误';
+        currentState = streamOpened
+          ? markStreamInterrupted(currentState, message)
+          : markOpenFailed(currentState, {
+              code: 'REQUEST_FAILED',
+              message: `无法建立流式连接：${message}`,
+              retryable: true,
+            });
+      }
+      publish();
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setPending(false);
+      }
+    }
+  };
+
+  const newConversation = () => {
+    if (controllerRef.current) return;
+    setConversationId(crypto.randomUUID());
+    setTurns([]);
+    setDraft('');
+  };
+
+  const stop = () => {
+    controllerRef.current?.abort(new DOMException('用户停止生成', 'AbortError'));
+  };
+
+  return (
+    <main className="page-shell" aria-labelledby="chat-title">
+      <Space direction="vertical" size={24} className="full-width">
+        <div>
+          <Tag color={selectedPaper ? 'geekblue' : 'default'}>
+            {selectedPaper ? selectedPaper.title : '全部可检索论文'}
+          </Tag>
+          <Typography.Title id="chat-title" level={2}>
+            论文问答
+          </Typography.Title>
+          <Typography.Paragraph type="secondary">
+            仅最近 10 轮成功问答参与上下文，并受文本总量限制。刷新或离开此页后开启新会话，切换论文也会开启新会话。
+          </Typography.Paragraph>
+        </div>
+
+        <Card className="surface-card">
+          <Form layout="vertical" onFinish={() => void submit()}>
+            <Form.Item label="检索范围">
+              <Select
+                aria-label="检索范围"
+                loading={paperLoading}
+                allowClear
+                disabled={active || paperLoading}
+                value={selectedPaperId}
+                placeholder="全部可检索论文"
+                options={readyPapers.map((paper) => ({
+                  value: paper.paperId,
+                  label: `${paper.title}${paper.pageCount ? ` · ${paper.pageCount} 页` : ''}`,
+                }))}
+                onChange={(value: string | undefined) => {
+                  if (controllerRef.current || value === selectedPaperId) return;
+                  setSelectedPaperId(value);
+                  newConversation();
+                }}
+              />
+              {paperError ? (
+                <Alert className="field-alert" type="warning" showIcon message={paperError} />
+              ) : null}
+              {!paperLoading && readyPapers.length === 0 ? (
+                <Alert
+                  className="field-alert"
+                  type="info"
+                  showIcon
+                  message="知识库中还没有可检索论文；此时只能得到模型知识回答。"
+                />
+              ) : null}
+            </Form.Item>
+            <Form.Item label="研究问题" required>
+              <Input.TextArea
+                aria-label="研究问题"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                autoSize={{ minRows: 4, maxRows: 10 }}
+                placeholder="例如：论文第二页报告的实验提升是多少？请给出引用。"
+                disabled={active}
+              />
+            </Form.Item>
+            <Flex gap={12} wrap align="center">
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={state.status === 'connecting'}
+                disabled={!canSubmit}
+              >
+                开始生成
+              </Button>
+              <Button onClick={newConversation} disabled={active}>新建会话</Button>
+              {active ? (
+                <Button danger onClick={stop}>
+                  停止生成
+                </Button>
+              ) : null}
+              <Typography.Text type="secondary">
+                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : '检索全部可检索论文'}
+              </Typography.Text>
+            </Flex>
+          </Form>
+        </Card>
+
+        {turns.length === 0 ? (
+          <Empty description="提交问题后，连续问答会显示在这里" />
+        ) : turns.map((turn) => (
+          <ConversationTurn key={turn.id} question={turn.question} state={turn.state} />
+        ))}
       </Space>
     </main>
   );
