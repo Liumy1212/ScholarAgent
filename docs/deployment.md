@@ -163,6 +163,7 @@ volume 内的账户或密码。
 | `AIRESEARCHER_MODEL_DEVICE` | `auto`，可改为 `cpu` |
 | `AIRESEARCHER_VECTOR_SIZE` | `1024`，必须与 embedding 和 collection 一致 |
 | `AIRESEARCHER_CHUNK_CONTEXT_MAX_CHARS` | `500`，单个 Chunk 的检索上下文字符上限 |
+| `AIRESEARCHER_CHUNK_CONTEXT_CONCURRENCY` | `4`，Chunk 上下文化的最大并发请求数（范围 1-16） |
 | `AIRESEARCHER_AGENT_BASE_URL` | Java 调用 Agent 的 `http://127.0.0.1:8000` |
 | `AIRESEARCHER_AGENT_CONNECT_TIMEOUT` | Java 下游连接超时，默认 `2s` |
 | `AIRESEARCHER_AGENT_OPEN_TIMEOUT` | Java 等待 SSE 建流超时，默认 `5s` |

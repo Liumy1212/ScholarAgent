@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -125,6 +126,7 @@ class IngestionWorker:
         self._vector_store = vector_store
         self._library_files = LibraryFileService(database=database, settings=settings)
         self._lease_seconds = settings.worker_lease_seconds
+        self._context_concurrency = settings.chunk_context_concurrency
         self._worker_id = worker_id[:128]
 
     def run_once(self) -> bool:
@@ -226,6 +228,7 @@ class IngestionWorker:
                 self._checkpoint(claimed, heartbeat)
                 self._verify_source(source)
                 self._set_stage(claimed, IngestionStage.CHUNKING)
+                parsed = self._prepare_chunks(claimed, parsed)
                 parsed = self._contextualize(claimed, parsed)
                 self._checkpoint(claimed, heartbeat)
                 self._verify_source(source)
@@ -387,38 +390,100 @@ class IngestionWorker:
             paper.updated_at = now
             self._renew(job, now)
 
-    def _contextualize(self, claimed: ClaimedJob, parsed: ParsedDocument) -> ParsedDocument:
+    def _prepare_chunks(self, claimed: ClaimedJob, parsed: ParsedDocument) -> ParsedDocument:
+        """Persist raw chunks and restore completed context from an earlier attempt."""
+        now = utc_now()
         paper_title = parsed.title or self._paper_title(claimed.paper_id)
-        contextualized: list[ParsedChunk] = []
-        try:
-            for index, chunk in enumerate(parsed.chunks):
-                previous = parsed.chunks[index - 1].quote if index > 0 else None
-                following = (
-                    parsed.chunks[index + 1].quote if index + 1 < len(parsed.chunks) else None
+        with self._database.transaction() as session:
+            job, _paper = self._locked_records(session, claimed)
+            existing = {
+                row.id: row
+                for row in session.execute(
+                    select(
+                        ChunkRecord.id,
+                        ChunkRecord.vector_id,
+                        ChunkRecord.page,
+                        ChunkRecord.ordinal,
+                        ChunkRecord.quote,
+                        ChunkRecord.section_path,
+                        ChunkRecord.context_text,
+                    ).where(ChunkRecord.paper_id == claimed.paper_id)
                 )
-                context_text = self._context_provider.generate(
-                    ChunkContextRequest(
-                        paper_title=paper_title,
-                        section_path=chunk.section_path,
-                        section_outline=parsed.section_outline,
-                        previous_text=previous,
-                        current_text=chunk.quote,
-                        next_text=following,
-                    )
+            }
+            prepared: list[ParsedChunk] = []
+            session.execute(delete(ChunkRecord).where(ChunkRecord.paper_id == claimed.paper_id))
+            for chunk in parsed.chunks:
+                cached = existing.get(chunk.chunk_id)
+                context_text = (
+                    cached.context_text
+                    if cached is not None
+                    and cached.vector_id == chunk.vector_id
+                    and cached.page == chunk.page
+                    and cached.ordinal == chunk.ordinal
+                    and cached.quote == chunk.quote
+                    and cached.section_path == " > ".join(chunk.section_path)
+                    and cached.context_text
+                    else ""
                 )
-                self._set_stage(claimed, IngestionStage.CHUNKING)
-                contextualized.append(
-                    replace(
-                        chunk,
-                        text=retrieval_text(
+                prepared_chunk = replace(
+                    chunk,
+                    text=(
+                        retrieval_text(
                             paper_title=paper_title,
                             section_path=chunk.section_path,
                             context_text=context_text,
                             quote=chunk.quote,
-                        ),
-                        context_text=context_text,
-                    )
+                        )
+                        if context_text
+                        else chunk.quote
+                    ),
+                    context_text=context_text,
                 )
+                prepared.append(prepared_chunk)
+                session.add(self._chunk_record(prepared_chunk, now))
+            self._renew(job, now)
+        return replace(parsed, chunks=tuple(prepared))
+
+    def _contextualize(self, claimed: ClaimedJob, parsed: ParsedDocument) -> ParsedDocument:
+        paper_title = parsed.title or self._paper_title(claimed.paper_id)
+        contextualized = list(parsed.chunks)
+        try:
+            pending = [index for index, chunk in enumerate(parsed.chunks) if not chunk.context_text]
+            with ThreadPoolExecutor(
+                max_workers=self._context_concurrency,
+                thread_name_prefix="chunk-context",
+            ) as executor:
+                for start in range(0, len(pending), self._context_concurrency):
+                    batch = pending[start : start + self._context_concurrency]
+                    futures = {
+                        index: executor.submit(
+                            self._context_provider.generate,
+                            self._context_request(parsed, paper_title, index),
+                        )
+                        for index in batch
+                    }
+                    first_error: ChunkContextError | None = None
+                    for index, future in futures.items():
+                        try:
+                            context_text = future.result()
+                        except ChunkContextError as error:
+                            first_error = first_error or error
+                            continue
+                        chunk = parsed.chunks[index]
+                        contextualized_chunk = replace(
+                            chunk,
+                            text=retrieval_text(
+                                paper_title=paper_title,
+                                section_path=chunk.section_path,
+                                context_text=context_text,
+                                quote=chunk.quote,
+                            ),
+                            context_text=context_text,
+                        )
+                        self._store_chunk_context(claimed, contextualized_chunk)
+                        contextualized[index] = contextualized_chunk
+                    if first_error is not None:
+                        raise first_error
         except ChunkContextError as error:
             raise IngestionError(
                 code="CONTEXTUALIZATION_FAILED",
@@ -426,6 +491,33 @@ class IngestionWorker:
                 retryable=True,
             ) from error
         return replace(parsed, chunks=tuple(contextualized))
+
+    @staticmethod
+    def _context_request(
+        parsed: ParsedDocument,
+        paper_title: str,
+        index: int,
+    ) -> ChunkContextRequest:
+        chunk = parsed.chunks[index]
+        return ChunkContextRequest(
+            paper_title=paper_title,
+            section_path=chunk.section_path,
+            section_outline=parsed.section_outline,
+            previous_text=parsed.chunks[index - 1].quote if index > 0 else None,
+            current_text=chunk.quote,
+            next_text=(parsed.chunks[index + 1].quote if index + 1 < len(parsed.chunks) else None),
+        )
+
+    def _store_chunk_context(self, claimed: ClaimedJob, chunk: ParsedChunk) -> None:
+        now = utc_now()
+        with self._database.transaction() as session:
+            job = self._locked_job(session, claimed, now)
+            record = session.get(ChunkRecord, chunk.chunk_id, with_for_update=True)
+            if record is None or record.paper_id != claimed.paper_id or record.quote != chunk.quote:
+                raise RuntimeError("prepared chunk disappeared during contextualization")
+            record.text = chunk.text
+            record.context_text = chunk.context_text
+            self._renew(job, now)
 
     def _chunk_record(self, chunk: ParsedChunk, now: datetime) -> ChunkRecord:
         return ChunkRecord(

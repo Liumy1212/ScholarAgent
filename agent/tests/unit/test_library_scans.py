@@ -345,6 +345,40 @@ def test_scan_removes_disappeared_original_without_knowledge(tmp_path: Path) -> 
     assert library_files.list_files(offset=0, limit=100).total == 0
 
 
+@pytest.mark.parametrize(
+    "source_status",
+    [LibraryFileSourceStatus.MISSING, LibraryFileSourceStatus.REPLACED],
+)
+def test_scan_removes_preexisting_unlinked_unavailable_registration(
+    tmp_path: Path,
+    source_status: LibraryFileSourceStatus,
+) -> None:
+    database, library_files, scans, worker = _services(tmp_path)
+    now = utc_now()
+    relative_path = f"stale-{source_status.value.casefold()}.pdf"
+    with database.transaction() as session:
+        session.add(
+            LibraryFileRecord(
+                id=f"library-file-stale-{source_status.value.casefold()}",
+                relative_path=relative_path,
+                path_key=hashlib.sha256(relative_path.encode()).hexdigest(),
+                file_name=relative_path,
+                file_size_bytes=32,
+                sha256=hashlib.sha256(source_status.value.encode()).hexdigest(),
+                source_status=source_status.value,
+                paper_id=None,
+                discovered_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+
+    scan_id = _run_scan(scans, worker)
+
+    assert scans.get_scan(scan_id).status is LibraryScanStatus.SUCCEEDED
+    assert library_files.list_files(offset=0, limit=100).total == 0
+
+
 def test_scan_marks_linked_original_missing_without_deleting_knowledge(tmp_path: Path) -> None:
     database, library_files, scans, worker = _services(tmp_path)
     settings = runtime_settings(tmp_path)

@@ -121,6 +121,27 @@ def _write_structured_pdf(path: Path) -> None:
     document.close()  # type: ignore[no-untyped-call]
 
 
+def _write_pdf_without_useful_title_metadata(path: Path) -> None:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    page = document.new_page()
+    page.insert_textbox(
+        (72, 55, 520, 120),
+        "Evidence-Grounded Retrieval for Local Research Libraries",
+        fontname="hebo",
+        fontsize=20,
+    )
+    page.insert_text((72, 130), "Ada Example and Li Ming", fontsize=11)
+    page.insert_text((72, 165), "Abstract", fontname="hebo", fontsize=14)
+    page.insert_text(
+        (72, 195),
+        "This synthetic paper evaluates title extraction from a first-page layout. " * 3,
+        fontsize=11,
+    )
+    document.set_metadata({"title": path.name})
+    document.save(path)  # type: ignore[no-untyped-call]
+    document.close()  # type: ignore[no-untyped-call]
+
+
 def test_compatibility_upload_reuses_original_library_and_sha256_deduplicates(
     tmp_path: Path,
 ) -> None:
@@ -454,6 +475,20 @@ def test_parser_keeps_chunks_on_their_source_page_and_extracts_metadata(tmp_path
     assert all(chunk.quote == chunk.text for chunk in parsed.chunks)
     assert len({chunk.chunk_id for chunk in parsed.chunks}) == len(parsed.chunks)
     assert parser.parse(paper_id="paper-test", path=pdf_path).chunks == parsed.chunks
+
+
+def test_parser_uses_first_page_title_when_metadata_is_only_the_file_name(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "opaque-download.pdf"
+    _write_pdf_without_useful_title_metadata(pdf_path)
+
+    parsed = PdfParser(max_pages=500, chunk_size=500, chunk_overlap=20).parse(
+        paper_id="paper-title-fallback",
+        path=pdf_path,
+    )
+
+    assert parsed.title == "Evidence-Grounded Retrieval for Local Research Libraries"
 
 
 def test_parser_rejects_pdf_without_extractable_text(tmp_path: Path) -> None:

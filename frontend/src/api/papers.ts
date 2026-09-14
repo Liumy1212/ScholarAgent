@@ -142,11 +142,14 @@ export async function getIngestionJob(
   ).data;
 }
 
-export async function retryIngestionJob(jobId: string): Promise<IngestionJob> {
+export async function retryIngestionJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<IngestionJob> {
   return (
     await requestJson<IngestionJob>(
       `/api/v1/ingestion-jobs/${encodeURIComponent(jobId)}/retry`,
-      { method: 'POST' },
+      { method: 'POST', signal },
     )
   ).data;
 }

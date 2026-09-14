@@ -107,6 +107,12 @@ class Settings(BaseSettings):
         ge=100,
         le=2000,
     )
+    chunk_context_concurrency: int = Field(
+        default=4,
+        alias="AIRESEARCHER_CHUNK_CONTEXT_CONCURRENCY",
+        ge=1,
+        le=16,
+    )
 
     worker_poll_seconds: float = Field(
         default=2.0,

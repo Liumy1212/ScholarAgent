@@ -29,9 +29,9 @@ import {
 import { deletePaper, PaperApiError, retryIngestionJob } from '../api/papers';
 import type {
   IngestionStage,
+  IngestionJob,
   LibraryFile,
   LibraryFileKnowledgeStatus,
-  LibraryFileUploadData,
   LibraryInfo,
   LibraryScan,
   LibraryScanItem,
@@ -41,9 +41,43 @@ import type {
 } from '../api/types';
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
+const MAX_BATCH_FILES = 10;
 const PAGE_SIZE = 10;
 const SCAN_POLL_INTERVAL_MS = 1200;
 const INGESTION_POLL_INTERVAL_MS = 1500;
+
+type BatchMode = 'UPLOAD_ONLY' | 'UPLOAD_AND_INGEST';
+type BatchItemStatus =
+  | 'WAITING'
+  | 'UPLOADING'
+  | 'QUEUEING'
+  | 'UPLOADED'
+  | 'QUEUED'
+  | 'REUSED'
+  | 'FAILED';
+type BatchRetryKind = 'UPLOAD' | 'INGEST' | 'JOB';
+
+interface BatchItem {
+  id: string;
+  file: File;
+  status: BatchItemStatus;
+  mode: BatchMode | null;
+  libraryFile: LibraryFile | null;
+  ingestionJob: IngestionJob | null;
+  duplicate: boolean;
+  error: string | null;
+  retryKind: BatchRetryKind | null;
+}
+
+const BATCH_STATUS_VIEW: Record<BatchItemStatus, { color: string; label: string }> = {
+  WAITING: { color: 'default', label: '等待处理' },
+  UPLOADING: { color: 'processing', label: '正在上传' },
+  QUEUEING: { color: 'processing', label: '正在创建入库任务' },
+  UPLOADED: { color: 'success', label: '原件已上传' },
+  QUEUED: { color: 'success', label: '已进入入库队列' },
+  REUSED: { color: 'blue', label: '已复用既有记录' },
+  FAILED: { color: 'error', label: '处理失败' },
+};
 
 const KNOWLEDGE_VIEW: Record<
   LibraryFileKnowledgeStatus,
@@ -113,6 +147,31 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
 }
 
+function validatePdf(file: File): string | null {
+  const acceptedMime =
+    file.type === '' ||
+    file.type === 'application/pdf' ||
+    file.type === 'application/octet-stream';
+  if (!file.name.toLowerCase().endsWith('.pdf') || !acceptedMime) {
+    return '请选择扩展名为 .pdf 的 PDF 文件。';
+  }
+  if (file.size === 0) {
+    return 'PDF 文件不能为空。';
+  }
+  if (file.size > MAX_PDF_BYTES) {
+    return 'PDF 不能超过 50 MB。';
+  }
+  return null;
+}
+
+function isBatchSuccess(status: BatchItemStatus): boolean {
+  return status === 'UPLOADED' || status === 'QUEUED' || status === 'REUSED';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 function isActiveScan(scan: LibraryScan | null): boolean {
   return scan?.status === 'QUEUED' || scan?.status === 'RUNNING';
 }
@@ -140,20 +199,29 @@ export function KnowledgeBasePage() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [libraryState, setLibraryState] = useState<LibraryStateFilter | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadResult, setUploadResult] = useState<LibraryFileUploadData | null>(null);
+  const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [preview, setPreview] = useState<LibraryFile | null>(null);
   const [latestScan, setLatestScan] = useState<LibraryScan | null>(null);
   const [scanItems, setScanItems] = useState<LibraryScanItem[]>([]);
   const [scanItemsOpen, setScanItemsOpen] = useState(false);
   const [scanItemsLoading, setScanItemsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
   const [creatingScan, setCreatingScan] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const batchAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      batchAbortRef.current?.abort();
+    };
+  }, []);
 
   const refresh = useCallback(
     async (
@@ -234,74 +302,177 @@ export function KnowledgeBasePage() {
     return { ready, notIngested };
   }, [files]);
 
-  const selectFile = (file: File | null) => {
+  const selectFiles = (selection: FileList | null) => {
     setNotice(null);
     setError(null);
-    setUploadResult(null);
-    if (!file) {
-      setSelectedFile(null);
+    if (!selection || selection.length === 0) {
+      setBatchItems([]);
       return;
     }
-    const acceptedMime =
-      file.type === '' ||
-      file.type === 'application/pdf' ||
-      file.type === 'application/octet-stream';
-    if (!file.name.toLowerCase().endsWith('.pdf') || !acceptedMime) {
-      setSelectedFile(null);
+    if (selection.length > MAX_BATCH_FILES) {
+      setBatchItems([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
-      setError('请选择扩展名为 .pdf 的 PDF 文件。');
+      setError(`一次最多选择 ${MAX_BATCH_FILES} 篇 PDF。`);
       return;
     }
-    if (file.size === 0) {
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-      setError('PDF 文件不能为空。');
-      return;
-    }
-    if (file.size > MAX_PDF_BYTES) {
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-      setError('PDF 不能超过 50 MB。');
-      return;
-    }
-    setSelectedFile(file);
+    setBatchItems(
+      Array.from(selection).map((file, index) => {
+        const validationError = validatePdf(file);
+        return {
+          id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+          file,
+          status: validationError ? 'FAILED' : 'WAITING',
+          mode: null,
+          libraryFile: null,
+          ingestionJob: null,
+          duplicate: false,
+          error: validationError,
+          retryKind: null,
+        };
+      }),
+    );
   };
 
-  const submitUpload = async () => {
-    if (!selectedFile || uploading) {
-      return;
+  const replaceBatchItem = (next: BatchItem) => {
+    if (mountedRef.current) {
+      setBatchItems((current) =>
+        current.map((item) => (item.id === next.id ? next : item)),
+      );
     }
-    setUploading(true);
+  };
+
+  const processBatchItem = async (
+    item: BatchItem,
+    mode: BatchMode,
+    signal: AbortSignal,
+  ): Promise<BatchItem> => {
+    let current = { ...item, mode, error: null };
+    try {
+      if (item.retryKind === 'JOB' && item.ingestionJob) {
+        current = { ...current, status: 'QUEUEING' };
+        replaceBatchItem(current);
+        const ingestionJob = await retryIngestionJob(item.ingestionJob.jobId, signal);
+        return {
+          ...current,
+          status: 'QUEUED',
+          ingestionJob,
+          retryKind: null,
+        };
+      }
+
+      let libraryFile = item.libraryFile;
+      let duplicate = item.duplicate;
+      if (item.retryKind !== 'INGEST' || libraryFile === null) {
+        current = { ...current, status: 'UPLOADING' };
+        replaceBatchItem(current);
+        const uploaded = await uploadLibraryFile(item.file, signal);
+        libraryFile = uploaded.libraryFile;
+        duplicate = uploaded.duplicate;
+        current = { ...current, libraryFile, duplicate };
+      }
+
+      if (mode === 'UPLOAD_ONLY') {
+        return {
+          ...current,
+          status: duplicate ? 'REUSED' : 'UPLOADED',
+          retryKind: null,
+        };
+      }
+
+      current = { ...current, status: 'QUEUEING', libraryFile, duplicate };
+      replaceBatchItem(current);
+      try {
+        const ingested = await ingestLibraryFile(libraryFile.libraryFileId, signal);
+        if (ingested.ingestionJob.status === 'FAILED') {
+          return {
+            ...current,
+            status: 'FAILED',
+            libraryFile: ingested.libraryFile,
+            ingestionJob: ingested.ingestionJob,
+            duplicate: duplicate || ingested.duplicate,
+            error: ingested.ingestionJob.failure
+              ? `${ingested.ingestionJob.failure.message}（${ingested.ingestionJob.failure.code}）`
+              : '既有入库任务失败。',
+            retryKind: ingested.ingestionJob.canRetry ? 'JOB' : null,
+          };
+        }
+        return {
+          ...current,
+          status: duplicate || ingested.duplicate ? 'REUSED' : 'QUEUED',
+          libraryFile: ingested.libraryFile,
+          ingestionJob: ingested.ingestionJob,
+          duplicate: duplicate || ingested.duplicate,
+          retryKind: null,
+        };
+      } catch (requestError) {
+        if (isAbortError(requestError)) throw requestError;
+        return {
+          ...current,
+          status: 'FAILED',
+          libraryFile,
+          duplicate,
+          error: errorMessage(requestError),
+          retryKind: 'INGEST',
+        };
+      }
+    } catch (requestError) {
+      if (isAbortError(requestError)) throw requestError;
+      return {
+        ...current,
+        status: 'FAILED',
+        error: errorMessage(requestError),
+        retryKind: item.retryKind === 'JOB' ? 'JOB' : 'UPLOAD',
+      };
+    }
+  };
+
+  const runBatch = async (items: BatchItem[], mode: BatchMode) => {
+    if (batchRunning || items.length === 0) return;
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setBatchRunning(true);
     setError(null);
     setNotice(null);
     try {
-      const result = await uploadLibraryFile(selectedFile);
-      setSelectedFile(null);
-      setUploadResult(result);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      for (const item of items) {
+        if (controller.signal.aborted) break;
+        const result = await processBatchItem(item, mode, controller.signal);
+        replaceBatchItem(result);
       }
-      setLibraryState(null);
-      setOffset(0);
-      setFiles((current) => [
-        result.libraryFile,
-        ...current.filter(
-          (file) => file.libraryFileId !== result.libraryFile.libraryFileId,
-        ),
-      ].slice(0, PAGE_SIZE));
-      setTotal((current) => (result.duplicate ? Math.max(current, 1) : current + 1));
-      await refresh(false, 0, null);
     } catch (requestError) {
-      setError(errorMessage(requestError));
+      if (!isAbortError(requestError) && mountedRef.current) {
+        setError(errorMessage(requestError));
+      }
     } finally {
-      setUploading(false);
+      if (mountedRef.current && !controller.signal.aborted) {
+        setLibraryState(null);
+        setOffset(0);
+        setNotice(
+          mode === 'UPLOAD_ONLY'
+            ? '批量上传处理完成；原件不会自动存入知识库。'
+            : '批量导入处理完成；成功项已进入现有入库队列。',
+        );
+        await refresh(false, 0, null);
+        setBatchRunning(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+      if (batchAbortRef.current === controller) batchAbortRef.current = null;
     }
+  };
+
+  const submitBatch = (mode: BatchMode) => {
+    const waiting = batchItems.filter((item) => item.status === 'WAITING');
+    void runBatch(waiting, mode);
+  };
+
+  const retryFailedBatchItems = () => {
+    const retryable = batchItems.filter(
+      (item) => item.status === 'FAILED' && item.retryKind !== null,
+    );
+    const mode = retryable.find((item) => item.mode)?.mode ?? 'UPLOAD_AND_INGEST';
+    void runBatch(retryable, mode ?? 'UPLOAD_AND_INGEST');
   };
 
   const startScan = async () => {
@@ -510,6 +681,13 @@ export function KnowledgeBasePage() {
 
   const scan = latestScan ?? library?.latestScan ?? null;
   const scanActive = isActiveScan(scan) || library?.scanInProgress === true;
+  const batchSuccessCount = batchItems.filter((item) => isBatchSuccess(item.status)).length;
+  const batchFailureCount = batchItems.filter((item) => item.status === 'FAILED').length;
+  const batchProcessedCount = batchSuccessCount + batchFailureCount;
+  const batchRetryableCount = batchItems.filter(
+    (item) => item.status === 'FAILED' && item.retryKind !== null,
+  ).length;
+  const batchWaitingCount = batchItems.filter((item) => item.status === 'WAITING').length;
 
   return (
     <main className="page-shell page-shell-wide" aria-labelledby="knowledge-base-title">
@@ -590,55 +768,94 @@ export function KnowledgeBasePage() {
           </Space>
         </Card>
 
-        <Card className="surface-card" title="上传 PDF 原件">
+        <Card className="surface-card" title="批量上传与导入 PDF">
           <Space direction="vertical" size={16} className="full-width">
-            <Alert type="info" showIcon message="上传只保存原件，不会自动存入知识库。" />
+            <Alert
+              type="info"
+              showIcon
+              message="可一次选择最多 10 篇 PDF；系统按顺序逐篇处理。"
+              description="“仅上传原件”不会入库；“上传并存入知识库”会在每篇上传成功后显式创建入库任务。"
+            />
             <label className="file-picker">
-              <Typography.Text strong>选择单个 PDF</Typography.Text>
+              <Typography.Text strong>选择 PDF（最多 10 篇）</Typography.Text>
               <input
                 ref={fileInputRef}
-                aria-label="选择单个 PDF"
+                aria-label="选择 PDF（最多 10 篇）"
                 type="file"
+                multiple
                 accept=".pdf,application/pdf,application/octet-stream"
-                disabled={uploading}
-                onChange={(event) => selectFile(event.target.files?.[0] ?? null)}
+                disabled={batchRunning}
+                onChange={(event) => selectFiles(event.target.files)}
               />
-              <Typography.Text type="secondary">仅 PDF，最大 50 MB</Typography.Text>
+              <Typography.Text type="secondary">仅 PDF，每篇最大 50 MB，严格串行</Typography.Text>
             </label>
-            {selectedFile ? (
-              <Flex gap={12} align="center" wrap>
-                <Tag color="geekblue">{selectedFile.name}</Tag>
-                <Typography.Text type="secondary">
-                  {formatBytes(selectedFile.size)}
-                </Typography.Text>
-              </Flex>
-            ) : null}
-            <Button
-              type="primary"
-              loading={uploading}
-              disabled={selectedFile === null || uploading}
-              onClick={() => void submitUpload()}
-            >
-              提交 PDF
-            </Button>
-            {uploadResult ? (
-              <Alert
-                type="success"
-                showIcon
-                message="原件已保存"
-                description={
-                  <Space direction="vertical" size={2}>
-                    <Typography.Text>
-                      保存路径：{uploadResult.libraryFile.relativePath}
-                    </Typography.Text>
-                    <Typography.Text>
-                      {uploadResult.duplicate
-                        ? '相同内容的原件已登记；尚未自动存入知识库。'
-                        : '尚未存入知识库，请在下方列表中手动操作。'}
-                    </Typography.Text>
-                  </Space>
-                }
-              />
+            <Flex gap={8} wrap>
+              <Button
+                disabled={batchWaitingCount === 0 || batchRunning}
+                onClick={() => submitBatch('UPLOAD_ONLY')}
+              >
+                仅上传原件
+              </Button>
+              <Button
+                type="primary"
+                loading={batchRunning}
+                disabled={batchWaitingCount === 0 || batchRunning}
+                onClick={() => submitBatch('UPLOAD_AND_INGEST')}
+              >
+                上传并存入知识库
+              </Button>
+              {batchRetryableCount > 0 ? (
+                <Button disabled={batchRunning} onClick={retryFailedBatchItems}>
+                  重试失败项（{batchRetryableCount}）
+                </Button>
+              ) : null}
+            </Flex>
+            {batchItems.length > 0 ? (
+              <div className="batch-panel" aria-live="polite">
+                <Flex justify="space-between" gap={12} wrap>
+                  <Typography.Text strong>批次进度</Typography.Text>
+                  <Typography.Text type="secondary">
+                    共 {batchItems.length} · 已处理 {batchProcessedCount} · 成功{' '}
+                    {batchSuccessCount} · 失败 {batchFailureCount}
+                  </Typography.Text>
+                </Flex>
+                <Progress
+                  percent={Math.round((batchProcessedCount / batchItems.length) * 100)}
+                  status={batchFailureCount > 0 && !batchRunning ? 'exception' : 'active'}
+                  showInfo={false}
+                  size="small"
+                />
+                <List
+                  size="small"
+                  dataSource={batchItems}
+                  renderItem={(item) => {
+                    const statusView = BATCH_STATUS_VIEW[item.status];
+                    return (
+                      <List.Item key={item.id} className="batch-list-item">
+                        <div className="batch-item-content">
+                          <Flex justify="space-between" gap={12} wrap>
+                            <Typography.Text>{item.file.name}</Typography.Text>
+                            <Flex gap={8} align="center" wrap>
+                              <Typography.Text type="secondary">
+                                {formatBytes(item.file.size)}
+                              </Typography.Text>
+                              <Tag color={statusView.color}>{statusView.label}</Tag>
+                            </Flex>
+                          </Flex>
+                          {item.libraryFile ? (
+                            <Typography.Text type="secondary">
+                              保存路径：{item.libraryFile.relativePath}
+                            </Typography.Text>
+                          ) : null}
+                          {item.error ? (
+                            <Typography.Text type="danger">{item.error}</Typography.Text>
+                          ) : null}
+                        </div>
+                      </List.Item>
+                    );
+                  }}
+                />
+              </div>
             ) : null}
             {notice ? <Alert type="success" showIcon message={notice} /> : null}
             {error ? <Alert type="error" showIcon message={error} /> : null}

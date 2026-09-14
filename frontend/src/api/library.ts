@@ -35,24 +35,29 @@ export async function listLibraryFiles(
   ).data;
 }
 
-export async function uploadLibraryFile(file: File): Promise<LibraryFileUploadData> {
+export async function uploadLibraryFile(
+  file: File,
+  signal?: AbortSignal,
+): Promise<LibraryFileUploadData> {
   const form = new FormData();
   form.append('file', file, file.name);
   return (
     await requestJson<LibraryFileUploadData>('/api/v1/library/files', {
       method: 'POST',
       body: form,
+      signal,
     })
   ).data;
 }
 
 export async function ingestLibraryFile(
   libraryFileId: string,
+  signal?: AbortSignal,
 ): Promise<LibraryFileIngestionData> {
   return (
     await requestJson<LibraryFileIngestionData>(
       `/api/v1/library/files/${encodeURIComponent(libraryFileId)}/ingestion`,
-      { method: 'POST' },
+      { method: 'POST', signal },
     )
   ).data;
 }

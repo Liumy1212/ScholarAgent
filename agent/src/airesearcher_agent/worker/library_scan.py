@@ -547,6 +547,17 @@ class LibraryScanWorker:
                 else:
                     record.source_status = LibraryFileSourceStatus.MISSING.value
                     record.updated_at = now
+            session.execute(
+                delete(LibraryFileRecord).where(
+                    LibraryFileRecord.paper_id.is_(None),
+                    LibraryFileRecord.source_status.in_(
+                        (
+                            LibraryFileSourceStatus.MISSING.value,
+                            LibraryFileSourceStatus.REPLACED.value,
+                        )
+                    ),
+                )
+            )
             self._renew(scan, now)
 
     def _complete(self, claimed: ClaimedScan) -> None:

@@ -42,6 +42,13 @@ KNOWN_HEADINGS = {
     "结论",
     "参考文献",
 }
+GENERIC_METADATA_TITLES = {
+    "document",
+    "microsoft word",
+    "untitled",
+    "untitled document",
+}
+DOCUMENT_FILE_SUFFIXES = {".doc", ".docx", ".pdf", ".ppt", ".pptx"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +187,12 @@ class PdfParser:
                 )
 
             metadata = document.metadata or {}
-            title = self._clean_metadata(metadata.get("title"))
+            title = self._document_title(
+                path=path,
+                metadata_title=metadata.get("title"),
+                first_page_blocks=page_blocks[0][1],
+                body_font_size=body_font_size,
+            )
             author_value = self._clean_metadata(metadata.get("author"))
             authors = self._authors(author_value)
             publication_year = self._year(metadata)
@@ -327,6 +339,46 @@ class PdfParser:
             return None
         cleaned = " ".join(value.replace("\x00", "").split()).strip()
         return cleaned[:1024] or None
+
+    def _document_title(
+        self,
+        *,
+        path: Path,
+        metadata_title: str | None,
+        first_page_blocks: tuple[TextBlock, ...],
+        body_font_size: float,
+    ) -> str | None:
+        metadata = self._clean_metadata(metadata_title)
+        if metadata is not None and not self._is_placeholder_title(metadata, path):
+            return metadata
+
+        candidates: list[tuple[float, bool, int, str]] = []
+        for index, block in enumerate(first_page_blocks):
+            text = " ".join(block.text.split()).strip()
+            normalized = text.casefold().rstrip(".:：")
+            if (
+                len(text) < 8
+                or len(text) > 300
+                or normalized in KNOWN_HEADINGS
+                or NUMBERED_HEADING_PATTERN.match(text) is not None
+                or block.max_font_size < max(body_font_size * 1.2, 12.0)
+            ):
+                continue
+            candidates.append((block.max_font_size, block.bold, -index, text))
+        if candidates:
+            _font_size, _bold, _position, title = max(candidates)
+            return title[:1024]
+        return None
+
+    @staticmethod
+    def _is_placeholder_title(title: str, path: Path) -> bool:
+        normalized = title.casefold().strip()
+        if normalized in GENERIC_METADATA_TITLES:
+            return True
+        title_stem = Path(normalized).stem
+        return title_stem == path.stem.casefold() and (
+            normalized == title_stem or Path(normalized).suffix in DOCUMENT_FILE_SUFFIXES
+        )
 
     def _authors(self, value: str | None) -> tuple[str, ...]:
         if value is None:

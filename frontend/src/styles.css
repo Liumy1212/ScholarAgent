@@ -111,6 +111,25 @@ textarea {
   max-width: 100%;
 }
 
+.batch-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #e7eaf2;
+  border-radius: 10px;
+  background: #fbfcff;
+}
+
+.batch-list-item.ant-list-item {
+  padding-inline: 0;
+}
+
+.batch-item-content {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+}
+
 .library-location,
 .scan-summary {
   display: grid;

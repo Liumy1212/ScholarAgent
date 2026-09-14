@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import monotonic, sleep
 
 import pymupdf
@@ -20,6 +20,7 @@ from tests.support import (
 import airesearcher_agent.worker.service as worker_service
 from airesearcher_agent.application.papers import PaperService
 from airesearcher_agent.domain.papers import IngestionJobStatus, IngestionStage, PaperStatus
+from airesearcher_agent.ingestion.context import ChunkContextError, ChunkContextRequest
 from airesearcher_agent.ingestion.pdf import PdfParser
 from airesearcher_agent.persistence.database import Database
 from airesearcher_agent.persistence.models import (
@@ -63,6 +64,39 @@ class BlockingEmbedding(DeterministicEmbedding):
         if not self._release.wait(timeout=5):
             raise TimeoutError("test did not release embedding provider")
         return super().encode(texts)
+
+
+class FailOnceOnCallChunkContext(DeterministicChunkContext):
+    def __init__(self, fail_on_call: int) -> None:
+        super().__init__()
+        self._fail_on_call = fail_on_call
+        self._failed = False
+
+    def generate(self, request: ChunkContextRequest) -> str:
+        if len(self.calls) + 1 == self._fail_on_call and not self._failed:
+            self.calls.append(request)
+            self._failed = True
+            raise ChunkContextError("synthetic contextualization failure")
+        return super().generate(request)
+
+
+class ConcurrentChunkContext(DeterministicChunkContext):
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def generate(self, request: ChunkContextRequest) -> str:
+        with self._lock:
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            sleep(0.03)
+            return super().generate(request)
+        finally:
+            with self._lock:
+                self._active -= 1
 
 
 class BlockingVectorStore(RecordingVectorStore):
@@ -123,6 +157,20 @@ def _pdf_bytes(path: Path) -> bytes:
         "Runtime worker evidence about retrieval, ranking, and grounded citations. " * 8,
         fontsize=11,
     )
+    document.save(path)  # type: ignore[no-untyped-call]
+    document.close()  # type: ignore[no-untyped-call]
+    return path.read_bytes()
+
+
+def _multi_chunk_pdf_bytes(path: Path) -> bytes:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    page = document.new_page()
+    for line_number in range(6):
+        page.insert_text(
+            (72, 72 + line_number * 24),
+            f"Evidence segment {line_number} about retrieval and grounded citations. " * 5,
+            fontsize=11,
+        )
     document.save(path)  # type: ignore[no-untyped-call]
     document.close()  # type: ignore[no-untyped-call]
     return path.read_bytes()
@@ -291,17 +339,28 @@ def test_worker_rejects_an_original_changed_after_parsing_without_publishing(
 
 
 def test_worker_fails_retryably_when_chunk_context_generation_fails(tmp_path: Path) -> None:
-    settings = runtime_settings(tmp_path)
+    settings = runtime_settings(
+        tmp_path,
+        AIRESEARCHER_CHUNK_SIZE=200,
+        AIRESEARCHER_CHUNK_OVERLAP=20,
+        AIRESEARCHER_CHUNK_CONTEXT_CONCURRENCY=1,
+    )
     database = sqlite_database()
     vectors = RecordingVectorStore()
     service = PaperService(database=database, settings=settings, vector_store=vectors)
     uploaded = asyncio.run(
-        service.upload(MemoryUpload(_pdf_bytes(tmp_path / "context.pdf"), filename="context.pdf"))
+        service.upload(
+            MemoryUpload(
+                _multi_chunk_pdf_bytes(tmp_path / "context.pdf"),
+                filename="context.pdf",
+            )
+        )
     )
+    context_provider = FailOnceOnCallChunkContext(fail_on_call=2)
     worker = IngestionWorker(
         database=database,
-        parser=PdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
-        context_provider=DeterministicChunkContext(fail_calls=1),
+        parser=PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20),
+        context_provider=context_provider,
         embedding=DeterministicEmbedding(),
         vector_store=vectors,
         settings=settings,
@@ -317,7 +376,48 @@ def test_worker_fails_retryably_when_chunk_context_generation_fails(tmp_path: Pa
     assert failed.can_retry is True
     assert vectors.upserts == []
     with database.session() as session:
-        assert session.query(ChunkRecord).count() == 0
+        chunks = session.query(ChunkRecord).order_by(ChunkRecord.ordinal).all()
+        assert len(chunks) > 2
+        assert chunks[0].context_text
+        assert all(not chunk.context_text for chunk in chunks[1:])
+
+    service.retry_job(failed.job_id)
+    assert worker.run_once() is True
+    assert service.get_job(failed.job_id).status is IngestionJobStatus.SUCCEEDED
+    assert [request.current_text for request in context_provider.calls].count(chunks[0].quote) == 1
+
+
+def test_worker_contextualizes_chunks_with_bounded_concurrency(tmp_path: Path) -> None:
+    settings = runtime_settings(
+        tmp_path,
+        AIRESEARCHER_CHUNK_SIZE=200,
+        AIRESEARCHER_CHUNK_OVERLAP=20,
+        AIRESEARCHER_CHUNK_CONTEXT_CONCURRENCY=3,
+    )
+    database = sqlite_database()
+    vectors = RecordingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    asyncio.run(
+        service.upload(
+            MemoryUpload(
+                _multi_chunk_pdf_bytes(tmp_path / "concurrent-context.pdf"),
+                filename="concurrent-context.pdf",
+            )
+        )
+    )
+    context_provider = ConcurrentChunkContext()
+    worker = IngestionWorker(
+        database=database,
+        parser=PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20),
+        context_provider=context_provider,
+        embedding=DeterministicEmbedding(),
+        vector_store=vectors,
+        settings=settings,
+        worker_id="concurrent-context-worker",
+    )
+
+    assert worker.run_once() is True
+    assert context_provider.max_active == 3
 
 
 @pytest.mark.parametrize("blocked_operation", ["parse", "embedding", "delete", "upsert"])

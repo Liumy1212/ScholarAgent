@@ -140,6 +140,21 @@ function paperData(file: LibraryFile) {
   };
 }
 
+function ingestionData(file: LibraryFile, duplicate = false) {
+  return {
+    libraryFile: file,
+    paper: paperData(file),
+    ingestionJob: {
+      ...file.currentIngestion,
+      paperId: file.paperId ?? 'paper-001',
+      createdAt: NOW,
+      startedAt: null,
+      completedAt: null,
+    },
+    duplicate,
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -167,7 +182,7 @@ describe('KnowledgeBasePage', () => {
     render(<KnowledgeBasePage />);
 
     await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
-    const submit = screen.getByRole('button', { name: '提交 PDF' });
+    const submit = screen.getByRole('button', { name: '仅上传原件' });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: '原件缺失' }));
     await waitFor(() => {
@@ -177,7 +192,7 @@ describe('KnowledgeBasePage', () => {
         ),
       ).toBe(true);
     });
-    const input = screen.getByLabelText('选择单个 PDF') as HTMLInputElement;
+    const input = screen.getByLabelText('选择 PDF（最多 10 篇）') as HTMLInputElement;
     const file = new File(['%PDF-1.7 synthetic'], 'synthetic.pdf');
     fireEvent.change(input, { target: { files: [file] } });
 
@@ -186,10 +201,10 @@ describe('KnowledgeBasePage', () => {
     expect((submit as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(submit);
 
-    expect(await screen.findByText('原件已保存')).toBeTruthy();
+    expect(await screen.findByText('原件已上传')).toBeTruthy();
     expect(screen.getByText('保存路径：uploads/synthetic.pdf')).toBeTruthy();
     expect(
-      screen.getByText('尚未存入知识库，请在下方列表中手动操作。'),
+      screen.getByText('批量上传处理完成；原件不会自动存入知识库。'),
     ).toBeTruthy();
     expect((await screen.findAllByText('未存入知识库')).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '存入知识库' })).toBeTruthy();
@@ -212,7 +227,7 @@ describe('KnowledgeBasePage', () => {
 
     fireEvent.change(input, { target: { files: [file] } });
     expect(
-      (screen.getByRole('button', { name: '提交 PDF' }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: '仅上传原件' }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
     expect(
@@ -233,7 +248,7 @@ describe('KnowledgeBasePage', () => {
     render(<KnowledgeBasePage />);
     await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
 
-    const input = screen.getByLabelText('选择单个 PDF');
+    const input = screen.getByLabelText('选择 PDF（最多 10 篇）');
     fireEvent.change(input, {
       target: { files: [new File(['%PDF-empty-mime'], 'empty-mime.pdf')] },
     });
@@ -281,17 +296,273 @@ describe('KnowledgeBasePage', () => {
     render(<KnowledgeBasePage />);
     await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
 
-    fireEvent.change(screen.getByLabelText('选择单个 PDF'), {
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
       target: {
         files: [
           new File(['%PDF-invalid'], 'invalid.pdf', { type: 'application/pdf' }),
         ],
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: '提交 PDF' }));
+    fireEvent.click(screen.getByRole('button', { name: '仅上传原件' }));
 
     expect(await screen.findByText('PDF 签名无效（INVALID_PDF）')).toBeTruthy();
     expect(screen.getByText('invalid.pdf')).toBeTruthy();
+  });
+
+  it('按选择顺序串行上传并逐篇创建入库任务', async () => {
+    const actions: string[] = [];
+    const uploadedById = new Map<string, LibraryFile>();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === '/api/v1/library') return jsonResponse(init, libraryInfo());
+        if (url.startsWith('/api/v1/library/files?')) {
+          return jsonResponse(init, page(Array.from(uploadedById.values())));
+        }
+        if (url === '/api/v1/library/files' && init?.method === 'POST') {
+          const upload = (init.body as FormData).get('file') as File;
+          const ordinal = upload.name === 'first.pdf' ? '001' : '002';
+          const registered = libraryFile('NOT_INGESTED', 'AVAILABLE', {
+            libraryFileId: `library-file-${ordinal}`,
+            fileName: upload.name,
+            relativePath: upload.name,
+          });
+          uploadedById.set(registered.libraryFileId, registered);
+          actions.push(`upload:${upload.name}`);
+          return jsonResponse(init, { libraryFile: registered, duplicate: false });
+        }
+        if (url.endsWith('/ingestion') && init?.method === 'POST') {
+          const libraryFileId = url.split('/').at(-2) ?? '';
+          const registered = uploadedById.get(libraryFileId);
+          if (!registered) throw new Error(`Missing upload for ${libraryFileId}`);
+          const queued = libraryFile('PROCESSING', 'AVAILABLE', {
+            ...registered,
+            paperId: `paper-${libraryFileId.slice(-3)}`,
+            paperTitle: registered.fileName,
+          });
+          uploadedById.set(libraryFileId, queued);
+          actions.push(`ingest:${registered.fileName}`);
+          return jsonResponse(init, ingestionData(queued));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<KnowledgeBasePage />);
+    await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
+
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
+      target: {
+        files: [
+          new File(['%PDF-first'], 'first.pdf', { type: 'application/pdf' }),
+          new File(['%PDF-second'], 'second.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '上传并存入知识库' }));
+
+    expect(
+      await screen.findByText('批量导入处理完成；成功项已进入现有入库队列。'),
+    ).toBeTruthy();
+    expect(actions).toEqual([
+      'upload:first.pdf',
+      'ingest:first.pdf',
+      'upload:second.pdf',
+      'ingest:second.pdf',
+    ]);
+    expect(screen.getByText(/共 2 · 已处理 2 · 成功 2 · 失败 0/)).toBeTruthy();
+    expect(screen.getAllByText('已进入入库队列')).toHaveLength(2);
+  });
+
+  it('单篇上传失败后继续处理并可重试失败项', async () => {
+    let firstAttempts = 0;
+    const actions: string[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === '/api/v1/library') return jsonResponse(init, libraryInfo());
+        if (url.startsWith('/api/v1/library/files?')) return jsonResponse(init, page([]));
+        if (url === '/api/v1/library/files' && init?.method === 'POST') {
+          const upload = (init.body as FormData).get('file') as File;
+          actions.push(`upload:${upload.name}`);
+          if (upload.name === 'first.pdf' && firstAttempts++ === 0) {
+            const requestId = new Headers(init.headers).get('X-Request-Id') ?? '';
+            return new Response(
+              JSON.stringify({ code: 'INVALID_PDF', message: '第一篇失败', requestId }),
+              {
+                status: 422,
+                headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+              },
+            );
+          }
+          const ordinal = upload.name === 'first.pdf' ? '001' : '002';
+          return jsonResponse(init, {
+            libraryFile: libraryFile('NOT_INGESTED', 'AVAILABLE', {
+              libraryFileId: `library-file-${ordinal}`,
+              fileName: upload.name,
+              relativePath: upload.name,
+            }),
+            duplicate: false,
+          });
+        }
+        if (url.endsWith('/ingestion') && init?.method === 'POST') {
+          actions.push(`ingest:${url.split('/').at(-2)}`);
+          const ordinal = url.includes('001') ? '001' : '002';
+          const queued = libraryFile('PROCESSING', 'AVAILABLE', {
+            libraryFileId: `library-file-${ordinal}`,
+            fileName: ordinal === '001' ? 'first.pdf' : 'second.pdf',
+            relativePath: ordinal === '001' ? 'first.pdf' : 'second.pdf',
+            paperId: `paper-${ordinal}`,
+          });
+          return jsonResponse(init, ingestionData(queued));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<KnowledgeBasePage />);
+    await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
+
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
+      target: {
+        files: [
+          new File(['%PDF-first'], 'first.pdf', { type: 'application/pdf' }),
+          new File(['%PDF-second'], 'second.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '上传并存入知识库' }));
+
+    expect(await screen.findByText('第一篇失败（INVALID_PDF）')).toBeTruthy();
+    expect(actions).toContain('ingest:library-file-002');
+    fireEvent.click(screen.getByRole('button', { name: '重试失败项（1）' }));
+    await waitFor(() => {
+      expect(actions).toContain('ingest:library-file-001');
+    });
+    expect(actions.filter((action) => action === 'upload:second.pdf')).toHaveLength(1);
+    expect(await screen.findByText(/共 2 · 已处理 2 · 成功 2 · 失败 0/)).toBeTruthy();
+  });
+
+  it('入库请求失败时重试不重复上传原件', async () => {
+    let uploadCalls = 0;
+    let ingestionCalls = 0;
+    const registered = libraryFile('NOT_INGESTED');
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === '/api/v1/library') return jsonResponse(init, libraryInfo());
+        if (url.startsWith('/api/v1/library/files?')) return jsonResponse(init, page([]));
+        if (url === '/api/v1/library/files' && init?.method === 'POST') {
+          uploadCalls += 1;
+          return jsonResponse(init, { libraryFile: registered, duplicate: false });
+        }
+        if (url.endsWith('/ingestion') && init?.method === 'POST') {
+          ingestionCalls += 1;
+          if (ingestionCalls === 1) {
+            const requestId = new Headers(init.headers).get('X-Request-Id') ?? '';
+            return new Response(
+              JSON.stringify({
+                code: 'DATABASE_UNAVAILABLE',
+                message: '数据库暂不可用',
+                requestId,
+              }),
+              {
+                status: 502,
+                headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+              },
+            );
+          }
+          return jsonResponse(init, ingestionData(libraryFile('PROCESSING')));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<KnowledgeBasePage />);
+    await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
+      target: { files: [new File(['%PDF-retry'], 'retry.pdf')] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '上传并存入知识库' }));
+
+    expect(await screen.findByText('数据库暂不可用（DATABASE_UNAVAILABLE）')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '重试失败项（1）' }));
+    expect(await screen.findByText(/共 1 · 已处理 1 · 成功 1 · 失败 0/)).toBeTruthy();
+    expect(uploadCalls).toBe(1);
+    expect(ingestionCalls).toBe(2);
+  });
+
+  it('复用到可重试失败任务时调用现有任务重试接口', async () => {
+    const failed = libraryFile('FAILED');
+    const requestedActions: string[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === '/api/v1/library') return jsonResponse(init, libraryInfo());
+        if (url.startsWith('/api/v1/library/files?')) return jsonResponse(init, page([]));
+        if (url === '/api/v1/library/files' && init?.method === 'POST') {
+          requestedActions.push('upload');
+          return jsonResponse(init, {
+            libraryFile: libraryFile('NOT_INGESTED'),
+            duplicate: true,
+          });
+        }
+        if (url.endsWith('/ingestion') && init?.method === 'POST') {
+          requestedActions.push('ingest');
+          return jsonResponse(init, ingestionData(failed, true));
+        }
+        if (url === '/api/v1/ingestion-jobs/job-001/retry' && init?.method === 'POST') {
+          requestedActions.push('retry-job');
+          return jsonResponse(init, {
+            ...libraryFile('PROCESSING').currentIngestion,
+            paperId: 'paper-001',
+            createdAt: NOW,
+            startedAt: null,
+            completedAt: null,
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<KnowledgeBasePage />);
+    await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
+      target: { files: [new File(['%PDF-existing'], 'existing.pdf')] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '上传并存入知识库' }));
+
+    expect(await screen.findByText('合成解析失败（PARSE_FAILED）')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '重试失败项（1）' }));
+    expect(await screen.findByText(/共 1 · 已处理 1 · 成功 1 · 失败 0/)).toBeTruthy();
+    expect(requestedActions).toEqual(['upload', 'ingest', 'retry-job']);
+  });
+
+  it('超过十篇时拒绝整次选择', async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === '/api/v1/library') return jsonResponse(init, libraryInfo());
+        if (url.startsWith('/api/v1/library/files?')) return jsonResponse(init, page([]));
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<KnowledgeBasePage />);
+    await screen.findByText('还没有登记原件；可上传 PDF 或扫描 originals 目录');
+
+    fireEvent.change(screen.getByLabelText('选择 PDF（最多 10 篇）'), {
+      target: {
+        files: Array.from(
+          { length: 11 },
+          (_, index) => new File(['%PDF'], `paper-${index}.pdf`),
+        ),
+      },
+    });
+
+    expect(await screen.findByText('一次最多选择 10 篇 PDF。')).toBeTruthy();
+    expect((screen.getByRole('button', { name: '仅上传原件' }) as HTMLButtonElement).disabled)
+      .toBe(true);
   });
 
   it('对未存入原件显式创建入库任务', async () => {
@@ -350,6 +621,9 @@ describe('KnowledgeBasePage', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<KnowledgeBasePage />);
 
+    expect(
+      await screen.findByRole('heading', { name: 'Synthetic Research Paper' }),
+    ).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: '预览 PDF' }));
     const preview = await screen.findByTitle('synthetic.pdf PDF 预览');
     expect(preview.getAttribute('src')).toBe(
