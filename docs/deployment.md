@@ -392,6 +392,7 @@ pnpm dev
 | --- | --- | --- |
 | PDF 原件 | `AIRESEARCHER_PAPER_LIBRARY_DIR/`，手动放入与网页上传共用 | 是 |
 | 上传暂存 | `AIRESEARCHER_PAPER_LIBRARY_DIR/.staging/` | 是 |
+| 逻辑知识库与成员关系 | MySQL `airesearcher_mysql_data` named volume | 是 |
 | embedding/reranker | `AIRESEARCHER_MODEL_CACHE_DIR` | 是 |
 | MySQL | `airesearcher_mysql_data` named volume | 是 |
 | Qdrant | `airesearcher_qdrant_data` named volume | 是 |
@@ -399,6 +400,9 @@ pnpm dev
 
 备份至少需要覆盖原件库、MySQL 和 Qdrant。只备份数据库而不备份 PDF，或只备份 PDF
 而不保留数据库/向量，都不能完整恢复当前知识库。
+
+原件目录可以保留任意子文件夹，扫描会递归遍历；文件夹名称和层级不创建或映射逻辑知识库。
+逻辑知识库由页面或 API 显式维护，创建、改名和删除均不会移动 PDF 或复制索引。
 
 ## 8. 从旧 PDF storage 迁移
 

@@ -33,6 +33,7 @@ class AgentRunStore:
                 AgentRunRecord.conversation_id == prompt.conversation_id,
                 AgentRunRecord.status == "COMPLETED",
                 AgentRunRecord.id != prompt.run_id,
+                AgentRunRecord.scope_key == prompt.scope_key,
                 user.conversation_id == prompt.conversation_id,
                 assistant.conversation_id == prompt.conversation_id,
                 user.role == "user",
@@ -74,6 +75,10 @@ class AgentRunStore:
                     tool_rounds=0,
                     error_code=None,
                     error_message=None,
+                    scope_type=prompt.scope_type,
+                    scope_key=prompt.scope_key,
+                    scope_id=prompt.scope_id,
+                    paper_ids_snapshot=list(prompt.paper_ids),
                     created_at=now,
                     completed_at=None,
                 )

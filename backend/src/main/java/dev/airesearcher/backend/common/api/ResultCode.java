@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus;
 public enum ResultCode {
     SUCCESS("SUCCESS", "Success.", HttpStatus.OK, false),
     INVALID_REQUEST("INVALID_REQUEST", "Request validation failed.", HttpStatus.BAD_REQUEST, false),
+    KNOWLEDGE_BASE_NOT_FOUND("KNOWLEDGE_BASE_NOT_FOUND", "未找到指定知识库。", HttpStatus.NOT_FOUND, false),
+    KNOWLEDGE_BASE_NOT_SEARCHABLE("KNOWLEDGE_BASE_NOT_SEARCHABLE", "该知识库当前没有可检索论文。", HttpStatus.CONFLICT, false),
     INTERNAL_ERROR("INTERNAL_ERROR", "An internal error occurred.", HttpStatus.INTERNAL_SERVER_ERROR, false),
     AGENT_UNAVAILABLE("AGENT_UNAVAILABLE", "Agent service is unavailable.", HttpStatus.BAD_GATEWAY, true),
     AGENT_TIMEOUT("AGENT_TIMEOUT", "Timed out while opening the Agent stream.", HttpStatus.GATEWAY_TIMEOUT, true),

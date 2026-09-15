@@ -32,6 +32,9 @@ class StreamChatCommand:
     conversation_id: str
     content: str
     paper_ids: tuple[str, ...]
+    scope_type: str = "ALL"
+    scope_key: str = "ALL"
+    scope_id: str | None = None
 
 
 class _EventFactory:
@@ -96,6 +99,9 @@ class StreamChatUseCase:
             assistant_message_id=events.assistant_message_id,
             content=command.content,
             paper_ids=command.paper_ids,
+            scope_type=command.scope_type,
+            scope_key=command.scope_key,
+            scope_id=command.scope_id,
         )
         answer_mode: AnswerMode | None = None
         provider_events = self._provider.stream(prompt)

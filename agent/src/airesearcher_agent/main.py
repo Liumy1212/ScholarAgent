@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from airesearcher_agent.api.errors import agent_error_handler, request_validation_error_handler
 from airesearcher_agent.api.routes import create_agent_router
 from airesearcher_agent.application.errors import AgentError
+from airesearcher_agent.application.knowledge_bases import KnowledgeBaseService
 from airesearcher_agent.application.ports import ChatProvider
 from airesearcher_agent.application.runtime import RuntimeServices, build_runtime
 from airesearcher_agent.application.stream_chat import StreamChatUseCase
@@ -36,6 +37,8 @@ def create_app(
             services.library_file_service,
             services.library_lifecycle_service,
             services.library_scan_service,
+            services.knowledge_base_service or KnowledgeBaseService(services.database),
+            resolve_chat_scopes=provider is None or runtime is not None,
         )
     )
 

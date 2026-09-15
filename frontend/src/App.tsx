@@ -2,16 +2,18 @@ import { useState } from 'react';
 import { ConfigProvider, Layout, Menu, Typography, theme } from 'antd';
 import { ChatPage } from './pages/ChatPage';
 import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
+import { KnowledgeBasesPage } from './pages/KnowledgeBasesPage';
 
-type PageKey = 'chat' | 'knowledge';
+type PageKey = 'chat' | 'knowledge' | 'originals';
 
 const menuItems = [
+  { key: 'originals', label: '论文原件' },
   { key: 'knowledge', label: '知识库' },
   { key: 'chat', label: '论文问答' },
 ];
 
 export function App() {
-  const [page, setPage] = useState<PageKey>('knowledge');
+  const [page, setPage] = useState<PageKey>('originals');
 
   return (
     <ConfigProvider
@@ -47,10 +49,10 @@ export function App() {
           />
         </Layout.Header>
         <Layout.Content>
-          {page === 'chat' ? <ChatPage /> : <KnowledgeBasePage />}
+          {page === 'chat' ? <ChatPage /> : page === 'knowledge' ? <KnowledgeBasesPage /> : <KnowledgeBasePage />}
         </Layout.Content>
         <Layout.Footer className="app-footer">
-          AIResearcher · Single-paper Demo v0.1
+          AIResearcher · Local multi-library RAG
         </Layout.Footer>
       </Layout>
     </ConfigProvider>

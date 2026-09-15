@@ -193,7 +193,9 @@ class RetrievalTools:
             )
         ]
 
-    def document_lookup(self, arguments: DocumentLookupArgs) -> list[DocumentMatch]:
+    def document_lookup(
+        self, arguments: DocumentLookupArgs, *, paper_ids: tuple[str, ...] | None = None
+    ) -> list[DocumentMatch]:
         term = arguments.query.strip()
         like = f"%{term}%"
         conditions: list[ColumnElement[bool]] = [
@@ -204,7 +206,7 @@ class RetrievalTools:
         if term.isdigit() and len(term) == 4:
             conditions.append(PaperRecord.publication_year == int(term))
         with self._database.session() as session:
-            papers = session.scalars(
+            statement = (
                 select(PaperRecord)
                 .join(LibraryFileRecord, LibraryFileRecord.paper_id == PaperRecord.id)
                 .where(or_(*conditions))
@@ -215,7 +217,12 @@ class RetrievalTools:
                 .distinct()
                 .order_by(PaperRecord.created_at.desc())
                 .limit(10)
-            ).all()
+            )
+            if paper_ids is not None:
+                if not paper_ids:
+                    return []
+                statement = statement.where(PaperRecord.id.in_(paper_ids))
+            papers = session.scalars(statement).all()
         return [
             DocumentMatch(
                 paper_id=paper.id,

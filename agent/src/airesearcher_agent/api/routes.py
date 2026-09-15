@@ -6,8 +6,15 @@ from starlette.datastructures import UploadFile
 
 from airesearcher_agent.api.models import (
     ChatStreamRequest,
+    DeleteKnowledgeBaseResponse,
     DeletePaperResponse,
     IngestionJobResponse,
+    KnowledgeBaseMembersRequest,
+    KnowledgeBaseMembersUpdateResponse,
+    KnowledgeBaseNameRequest,
+    KnowledgeBasePapersPageResponse,
+    KnowledgeBaseResponse,
+    KnowledgeBasesPageResponse,
     LibraryFileIngestionResponse,
     LibraryFilesPageResponse,
     LibraryFileUploadResponse,
@@ -21,11 +28,13 @@ from airesearcher_agent.api.models import (
 from airesearcher_agent.api.pdf import pdf_file_response
 from airesearcher_agent.api.sse import ChatStreamingResponse, encode_sse
 from airesearcher_agent.application.errors import AgentError, ErrorDetail
+from airesearcher_agent.application.knowledge_bases import KnowledgeBaseService
 from airesearcher_agent.application.library_files import LibraryFileService
 from airesearcher_agent.application.library_lifecycle import LibraryLifecycleService
 from airesearcher_agent.application.library_scans import LibraryScanService
 from airesearcher_agent.application.papers import PaperService
 from airesearcher_agent.application.stream_chat import StreamChatCommand, StreamChatUseCase
+from airesearcher_agent.domain.knowledge_bases import ResolvedChatScope
 from airesearcher_agent.domain.library import LibraryScanItemOutcome, LibraryStateFilter
 
 RequestIdHeader = Annotated[
@@ -39,6 +48,7 @@ LibraryFileIdPath = Annotated[
     Path(alias="libraryFileId", min_length=1, max_length=128),
 ]
 ScanIdPath = Annotated[str, Path(alias="scanId", min_length=1, max_length=128)]
+KnowledgeBaseIdPath = Annotated[str, Path(alias="knowledgeBaseId", min_length=1, max_length=128)]
 
 
 async def _single_pdf_upload(request: Request) -> UploadFile:
@@ -68,8 +78,97 @@ def create_agent_router(
     library_file_service: LibraryFileService,
     library_lifecycle_service: LibraryLifecycleService,
     library_scan_service: LibraryScanService,
+    knowledge_base_service: KnowledgeBaseService,
+    *,
+    resolve_chat_scopes: bool = True,
 ) -> APIRouter:
     router = APIRouter(prefix="/agent-api/v1")
+
+    @router.get("/knowledge-bases", response_model=KnowledgeBasesPageResponse)
+    def list_knowledge_bases(
+        response: Response,
+        request_id: RequestIdHeader,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> KnowledgeBasesPageResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBasesPageResponse.model_validate(knowledge_base_service.list(offset, limit))
+
+    @router.post("/knowledge-bases", response_model=KnowledgeBaseResponse, status_code=201)
+    def create_knowledge_base(
+        body: KnowledgeBaseNameRequest,
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> KnowledgeBaseResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBaseResponse.model_validate(knowledge_base_service.create(body.name))
+
+    @router.get("/knowledge-bases/{knowledgeBaseId}", response_model=KnowledgeBaseResponse)
+    def get_knowledge_base(
+        knowledge_base_id: KnowledgeBaseIdPath,
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> KnowledgeBaseResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBaseResponse.model_validate(knowledge_base_service.get(knowledge_base_id))
+
+    @router.patch("/knowledge-bases/{knowledgeBaseId}", response_model=KnowledgeBaseResponse)
+    def rename_knowledge_base(
+        body: KnowledgeBaseNameRequest,
+        knowledge_base_id: KnowledgeBaseIdPath,
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> KnowledgeBaseResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBaseResponse.model_validate(
+            knowledge_base_service.rename(knowledge_base_id, body.name)
+        )
+
+    @router.delete("/knowledge-bases/{knowledgeBaseId}", response_model=DeleteKnowledgeBaseResponse)
+    def delete_knowledge_base(
+        knowledge_base_id: KnowledgeBaseIdPath,
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> DeleteKnowledgeBaseResponse:
+        response.headers["X-Request-Id"] = request_id
+        return DeleteKnowledgeBaseResponse.model_validate(
+            knowledge_base_service.delete(knowledge_base_id)
+        )
+
+    @router.get(
+        "/knowledge-bases/{knowledgeBaseId}/papers",
+        response_model=KnowledgeBasePapersPageResponse,
+    )
+    def list_knowledge_base_papers(
+        knowledge_base_id: KnowledgeBaseIdPath,
+        response: Response,
+        request_id: RequestIdHeader,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> KnowledgeBasePapersPageResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBasePapersPageResponse.model_validate(
+            knowledge_base_service.list_papers(knowledge_base_id, offset, limit)
+        )
+
+    @router.patch(
+        "/knowledge-bases/{knowledgeBaseId}/papers",
+        response_model=KnowledgeBaseMembersUpdateResponse,
+    )
+    def update_knowledge_base_papers(
+        body: KnowledgeBaseMembersRequest,
+        knowledge_base_id: KnowledgeBaseIdPath,
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> KnowledgeBaseMembersUpdateResponse:
+        response.headers["X-Request-Id"] = request_id
+        return KnowledgeBaseMembersUpdateResponse.model_validate(
+            knowledge_base_service.update_members(
+                knowledge_base_id,
+                body.add_paper_ids,
+                body.remove_paper_ids,
+            )
+        )
 
     @router.get("/library", response_model=LibraryInfoResponse)
     def get_library(response: Response, request_id: RequestIdHeader) -> LibraryInfoResponse:
@@ -298,11 +397,26 @@ def create_agent_router(
         ],
         request_id: RequestIdHeader,
     ) -> StreamingResponse:
+        if resolve_chat_scopes:
+            scope = knowledge_base_service.resolve_chat_scope(
+                knowledge_base_id=body.knowledge_base_id,
+                paper_ids=tuple(body.paper_ids),
+            )
+        elif body.paper_ids:
+            selected = tuple(body.paper_ids)
+            scope = ResolvedChatScope(
+                "PAPERS", "PAPERS:" + ",".join(sorted(selected)), None, selected
+            )
+        else:
+            scope = ResolvedChatScope("ALL", "ALL", None, ())
         command = StreamChatCommand(
             request_id=request_id,
             conversation_id=conversation_id,
             content=body.content,
-            paper_ids=tuple(body.paper_ids),
+            paper_ids=scope.paper_ids,
+            scope_type=scope.scope_type,
+            scope_key=scope.scope_key,
+            scope_id=scope.scope_id,
         )
         return ChatStreamingResponse(
             encode_sse(stream_use_case.execute(command)),

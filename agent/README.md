@@ -5,14 +5,15 @@ AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 Deep
 
 当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理 PDF 原件，支持只登记上传、分页
 清单与 `libraryState` 筛选、后台扫描、逐篇手动入库、只删除知识并保留 PDF 原件、
-排除/恢复、MySQL 持久任务、PyMuPDF 章节感知页内切块、DeepSeek 逐 Chunk 上下文化、
+排除/恢复、可持久化逻辑知识库与成员关系、三类问答范围快照、MySQL 持久任务、
+PyMuPDF 章节感知页内切块、DeepSeek 逐 Chunk 上下文化、
 BGE-M3/Qdrant 与按论文版本缓存倒排索引的 BM25 双路召回、RRF 融合、本地 reranker、原生 Tool Calling、SSE 和引用校验。生成的
 上下文只进入检索文本，引用 quote 始终保留论文原文。扫描会清理没有知识关联的缺失或替换登记，并保留仍
 关联知识的缺失状态。旧
 `AIRESEARCHER_STORAGE_DIR` 仅保留迁移期兼容读取。
 
 PDF 直接存放在配置的论文目录中，网页上传与手动放入使用同一位置；仅 `.staging/` 用于
-上传暂存。目录布局与旧目录整理步骤见部署文档。
+上传暂存。扫描递归覆盖任意子目录，但文件夹没有知识库语义，也不会因创建知识库而移动原件。
 
 ## 目录结构
 

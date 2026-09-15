@@ -33,6 +33,9 @@ const routeDefinitions = [
   { suffix: "/papers/{paperId}/file", methods: ["get"], kind: "pdf" },
   { suffix: "/ingestion-jobs/{jobId}", methods: ["get"], kind: "json" },
   { suffix: "/ingestion-jobs/{jobId}/retry", methods: ["post"], kind: "json" },
+  { suffix: "/knowledge-bases", methods: ["get", "post"], kind: "json", statusByMethod: { post: "201" } },
+  { suffix: "/knowledge-bases/{knowledgeBaseId}", methods: ["get", "patch", "delete"], kind: "json" },
+  { suffix: "/knowledge-bases/{knowledgeBaseId}/papers", methods: ["get", "patch"], kind: "json" },
   {
     suffix: "/conversations/{conversationId}/messages/stream",
     methods: ["post"],
@@ -593,12 +596,21 @@ async function loadAndValidateOpenApi(specPath, prefix, side, requestIdRequired)
     assert.deepEqual(operationMethods(pathItem), [...route.methods].sort(), `${sourceName}: ${pathName} 方法不正确`);
     for (const method of route.methods) {
       const operation = pathItem[method];
+      const effectiveOperation = {
+        ...operation,
+        parameters: [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])],
+      };
       const operationName = `${sourceName}: ${method.toUpperCase()} ${pathName}`;
-      assertRequestId(operation, requestIdRequired, operationName);
-      assertPathParameters(operation, pathName, operationName);
+      assertRequestId(effectiveOperation, requestIdRequired, operationName);
+      assertPathParameters(effectiveOperation, pathName, operationName);
       assertResponseRequestIds(operation, operationName);
       if (route.kind === "json") {
-        assertJsonOperation(operation, side, operationName, route.successStatus ?? "200");
+        assertJsonOperation(
+          operation,
+          side,
+          operationName,
+          route.statusByMethod?.[method] ?? route.successStatus ?? "200",
+        );
       } else if (route.kind === "pdf") {
         assertPdfOperation(operation, operationName);
       } else {
@@ -832,6 +844,11 @@ async function validateOpenApis() {
     "IngestionSummary",
     "Paper",
     "IngestionJob",
+    "KnowledgeBaseNameRequest",
+    "KnowledgeBase",
+    "KnowledgeBasesPage",
+    "KnowledgeBasePapersPage",
+    "KnowledgeBaseMembersRequest",
     "LibraryFile",
     "LibraryFilesPage",
     "LibraryScanFailure",
@@ -880,7 +897,7 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents with 17 REST operations plus shared SSE");
+  console.log("- 2 OpenAPI documents with 24 REST operations plus shared SSE");
   console.log("- 2 JSON Schemas");
   console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");

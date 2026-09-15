@@ -47,7 +47,9 @@ public class ChatService {
             ChatStreamRequest request,
             String requestId
     ) {
-        AgentChatStreamRequest agentRequest = new AgentChatStreamRequest(request.content(), request.paperIds());
+        AgentChatStreamRequest agentRequest = new AgentChatStreamRequest(
+                request.content(), request.paperIds(), request.knowledgeBaseId()
+        );
         AgentSseStream agentStream = agentSseClient.openStream(conversationId, agentRequest, requestId);
 
         SseEmitter emitter = emitterFactory.create(properties.emitterTimeout().toMillis());

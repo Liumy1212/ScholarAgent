@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from airesearcher_agent.domain.library import (
     LibraryFileKnowledgeStatus,
@@ -24,6 +31,7 @@ class ChatStreamRequest(BaseModel):
 
     content: Annotated[str, StringConstraints(min_length=1, max_length=16000)]
     paper_ids: list[Identifier] = Field(alias="paperIds", max_length=100)
+    knowledge_base_id: Identifier | None = Field(default=None, alias="knowledgeBaseId")
 
     @field_validator("paper_ids")
     @classmethod
@@ -31,6 +39,12 @@ class ChatStreamRequest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("paperIds must contain unique items")
         return value
+
+    @model_validator(mode="after")
+    def scope_must_be_unambiguous(self) -> "ChatStreamRequest":
+        if self.knowledge_base_id is not None and self.paper_ids:
+            raise ValueError("knowledgeBaseId and paperIds are mutually exclusive")
+        return self
 
 
 def _to_camel(value: str) -> str:
@@ -100,6 +114,60 @@ class PaperListResponse(WireModel):
 
 class DeletePaperResponse(WireModel):
     paper_id: str
+    deleted: Literal[True]
+
+
+class KnowledgeBaseNameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+
+
+class KnowledgeBaseMembersRequest(WireModel):
+    add_paper_ids: tuple[Identifier, ...] = Field(max_length=100)
+    remove_paper_ids: tuple[Identifier, ...] = Field(max_length=100)
+
+    @model_validator(mode="after")
+    def validate_members(self) -> "KnowledgeBaseMembersRequest":
+        if len(set(self.add_paper_ids)) != len(self.add_paper_ids):
+            raise ValueError("addPaperIds must contain unique items")
+        if len(set(self.remove_paper_ids)) != len(self.remove_paper_ids):
+            raise ValueError("removePaperIds must contain unique items")
+        if set(self.add_paper_ids) & set(self.remove_paper_ids):
+            raise ValueError("the same paper cannot be added and removed")
+        return self
+
+
+class KnowledgeBaseResponse(WireModel):
+    knowledge_base_id: str
+    name: str
+    paper_count: int
+    searchable_paper_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeBasesPageResponse(WireModel):
+    items: tuple[KnowledgeBaseResponse, ...]
+    total: int
+    offset: int
+    limit: int
+
+
+class KnowledgeBasePapersPageResponse(WireModel):
+    items: tuple[PaperResponse, ...]
+    total: int
+    offset: int
+    limit: int
+
+
+class KnowledgeBaseMembersUpdateResponse(WireModel):
+    knowledge_base: KnowledgeBaseResponse
+    added_paper_ids: tuple[str, ...]
+    removed_paper_ids: tuple[str, ...]
+
+
+class DeleteKnowledgeBaseResponse(WireModel):
+    knowledge_base_id: str
     deleted: Literal[True]
 
 

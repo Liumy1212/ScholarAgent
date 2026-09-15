@@ -17,6 +17,9 @@ class ChatPrompt:
     assistant_message_id: str
     content: str
     paper_ids: tuple[str, ...]
+    scope_type: str = "ALL"
+    scope_key: str = "ALL"
+    scope_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

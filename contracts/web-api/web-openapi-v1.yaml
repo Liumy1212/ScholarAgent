@@ -14,6 +14,7 @@ externalDocs:
   url: ../sse/v1/README.md
 tags:
   - name: Library
+  - name: Knowledge bases
   - name: Papers
   - name: Ingestion jobs
   - name: Conversations
@@ -502,6 +503,96 @@ paths:
           $ref: '#/components/responses/JsonErrorResponse'
         '504':
           $ref: '#/components/responses/JsonErrorResponse'
+  /api/v1/knowledge-bases:
+    get:
+      tags: [Knowledge bases]
+      operationId: listWebKnowledgeBases
+      parameters:
+        - $ref: '#/components/parameters/LibraryFilesOffset'
+        - $ref: '#/components/parameters/LibraryFilesLimit'
+        - $ref: '#/components/parameters/OptionalRequestId'
+      responses:
+        '200':
+          description: 分页知识库列表 Result。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBasesResult' } } }
+    post:
+      tags: [Knowledge bases]
+      operationId: createWebKnowledgeBase
+      parameters:
+        - $ref: '#/components/parameters/OptionalRequestId'
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseNameRequest' } } }
+      responses:
+        '201':
+          description: 知识库已创建。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseResult' } } }
+        '409': { $ref: '#/components/responses/JsonErrorResponse' }
+  /api/v1/knowledge-bases/{knowledgeBaseId}:
+    parameters:
+      - $ref: '#/components/parameters/KnowledgeBaseId'
+      - $ref: '#/components/parameters/OptionalRequestId'
+    get:
+      tags: [Knowledge bases]
+      operationId: getWebKnowledgeBase
+      responses:
+        '200':
+          description: 知识库详情 Result。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseResult' } } }
+        '404': { $ref: '#/components/responses/JsonErrorResponse' }
+    patch:
+      tags: [Knowledge bases]
+      operationId: renameWebKnowledgeBase
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseNameRequest' } } }
+      responses:
+        '200':
+          description: 已重命名。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseResult' } } }
+        '404': { $ref: '#/components/responses/JsonErrorResponse' }
+        '409': { $ref: '#/components/responses/JsonErrorResponse' }
+    delete:
+      tags: [Knowledge bases]
+      operationId: deleteWebKnowledgeBase
+      responses:
+        '200':
+          description: 只删除集合与成员关系。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/DeleteKnowledgeBaseResult' } } }
+        '404': { $ref: '#/components/responses/JsonErrorResponse' }
+  /api/v1/knowledge-bases/{knowledgeBaseId}/papers:
+    parameters:
+      - $ref: '#/components/parameters/KnowledgeBaseId'
+      - $ref: '#/components/parameters/OptionalRequestId'
+    get:
+      tags: [Knowledge bases]
+      operationId: listWebKnowledgeBasePapers
+      parameters:
+        - $ref: '#/components/parameters/LibraryFilesOffset'
+        - $ref: '#/components/parameters/LibraryFilesLimit'
+      responses:
+        '200':
+          description: 分页成员列表 Result。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBasePapersResult' } } }
+        '404': { $ref: '#/components/responses/JsonErrorResponse' }
+    patch:
+      tags: [Knowledge bases]
+      operationId: updateWebKnowledgeBasePapers
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseMembersRequest' } } }
+      responses:
+        '200':
+          description: 成员关系已原子更新。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseMembersUpdateResult' } } }
+        '404': { $ref: '#/components/responses/JsonErrorResponse' }
   /api/v1/conversations/{conversationId}/messages/stream:
     post:
       tags: [Conversations]
@@ -552,6 +643,11 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/Identifier'
+    KnowledgeBaseId:
+      name: knowledgeBaseId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Identifier' }
     PaperId:
       name: paperId
       in: path
@@ -902,6 +998,63 @@ components:
           type: boolean
           const: true
           description: true 表示论文知识、任务、chunk 和向量已删除；不表示 PDF 原件被删除。
+    KnowledgeBaseNameRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+    KnowledgeBase:
+      type: object
+      additionalProperties: false
+      required: [knowledgeBaseId, name, paperCount, searchablePaperCount, createdAt, updatedAt]
+      properties:
+        knowledgeBaseId: { $ref: '#/components/schemas/Identifier' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        paperCount: { type: integer, minimum: 0 }
+        searchablePaperCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    KnowledgeBasesPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, offset, limit]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/KnowledgeBase' } }
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    KnowledgeBasePapersPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, offset, limit]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Paper' } }
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    KnowledgeBaseMembersRequest:
+      type: object
+      additionalProperties: false
+      required: [addPaperIds, removePaperIds]
+      properties:
+        addPaperIds: { type: array, uniqueItems: true, maxItems: 100, items: { $ref: '#/components/schemas/Identifier' } }
+        removePaperIds: { type: array, uniqueItems: true, maxItems: 100, items: { $ref: '#/components/schemas/Identifier' } }
+    KnowledgeBaseMembersUpdateData:
+      type: object
+      additionalProperties: false
+      required: [knowledgeBase, addedPaperIds, removedPaperIds]
+      properties:
+        knowledgeBase: { $ref: '#/components/schemas/KnowledgeBase' }
+        addedPaperIds: { type: array, items: { $ref: '#/components/schemas/Identifier' } }
+        removedPaperIds: { type: array, items: { $ref: '#/components/schemas/Identifier' } }
+    DeleteKnowledgeBaseData:
+      type: object
+      additionalProperties: false
+      required: [knowledgeBaseId, deleted]
+      properties:
+        knowledgeBaseId: { $ref: '#/components/schemas/Identifier' }
+        deleted: { type: boolean, const: true }
     LibraryFile:
       type: object
       additionalProperties: false
@@ -1141,6 +1294,46 @@ components:
           minLength: 1
         requestId:
           $ref: '#/components/schemas/Identifier'
+    KnowledgeBaseResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/KnowledgeBase' }
+      unevaluatedProperties: false
+    KnowledgeBasesResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/KnowledgeBasesPage' }
+      unevaluatedProperties: false
+    KnowledgeBasePapersResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/KnowledgeBasePapersPage' }
+      unevaluatedProperties: false
+    KnowledgeBaseMembersUpdateResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/KnowledgeBaseMembersUpdateData' }
+      unevaluatedProperties: false
+    DeleteKnowledgeBaseResult:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResultBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/DeleteKnowledgeBaseData' }
+      unevaluatedProperties: false
     PaperUploadResult:
       allOf:
         - $ref: '#/components/schemas/SuccessResultBase'
@@ -1292,6 +1485,11 @@ components:
           description: 空数组表示检索默认全库；非空数组严格限定到给定论文。
           items:
             $ref: '#/components/schemas/Identifier'
+        knowledgeBaseId:
+          description: 指定逻辑知识库时 paperIds 必须为空；成员由 Agent 在建流前解析。
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
     SseEvent:
       $ref: ../sse/v1/sse-event.schema.json
     StreamOpenError:

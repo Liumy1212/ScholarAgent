@@ -12,6 +12,7 @@ interface StreamChatOptions {
   requestId: string;
   content: string;
   paperIds: string[];
+  knowledgeBaseId?: string;
   signal: AbortSignal;
   onOpen: (requestId: string) => void;
   onEvent: (event: ChatSseEvent) => void;
@@ -37,6 +38,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   const requestBody: ChatStreamRequest = {
     content: options.content,
     paperIds: options.paperIds,
+    knowledgeBaseId: options.knowledgeBaseId,
   };
   const path = `/api/v1/conversations/${encodeURIComponent(options.conversationId)}/messages/stream`;
   const response = await fetch(path, {

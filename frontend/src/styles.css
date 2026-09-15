@@ -202,6 +202,15 @@ textarea {
   padding-top: 18px;
 }
 
+.member-picker {
+  min-width: min(520px, 100%);
+  flex: 1 1 360px;
+}
+
+.selected-library.ant-list-item {
+  background: #f0f5ff;
+}
+
 .library-filters {
   display: flex;
   flex-wrap: wrap;

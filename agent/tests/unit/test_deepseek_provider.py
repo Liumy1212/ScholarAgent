@@ -112,7 +112,13 @@ class RecordingRetrievalTools:
             )
         ]
 
-    def document_lookup(self, arguments: DocumentLookupArgs) -> list[DocumentMatch]:
+    def document_lookup(
+        self,
+        arguments: DocumentLookupArgs,
+        *,
+        paper_ids: tuple[str, ...] | None = None,
+    ) -> list[DocumentMatch]:
+        del paper_ids
         self.lookup_calls.append(arguments)
         return [
             DocumentMatch(

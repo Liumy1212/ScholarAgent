@@ -37,13 +37,14 @@ flowchart LR
 
 ### React Frontend
 
-- 提供知识库、论文详情/PDF 预览和问答页面。
+- 提供论文原件、逻辑知识库、论文详情/PDF 预览和问答页面。
 - 展示实际扫描目录、统一原件清单、服务端筛选后的总数、入库与可检索状态、工具状态、
   流式回答和页码引用。
 - 网页上传接口只登记原件；页面可串行编排最多 10 篇 PDF 的上传与显式入库，并提供仅上传、
   逐篇手动入库、分阶段失败重试、知识删除和原件预览，不提供原件硬删除。批量状态只存在于
   当前页面，不建立持久批次。排除/恢复 API 仅为兼容性保留，不再作为知识库页面的主删除流程。
-- Chat 只允许选择 `searchable=true` 的论文。
+- 逻辑知识库支持创建、重命名、删除及批量成员维护；文件夹与知识库无映射关系。
+- Chat 支持全部可检索论文、单个逻辑知识库和单篇论文三类范围；空知识库禁用提交。
 - 只调用 Java 的相对路径 `/api/v1/**`。
 - POST SSE 使用 `fetch` 解析；PDF 预览使用浏览器原生能力。
 
@@ -54,12 +55,13 @@ flowchart LR
 - 通过 Agent client 调用 Python，并保持 PDF Range 与 SSE 事件语义。
 - 已代理原件库信息、带 `libraryState` 的分页清单、只登记上传、手动入库、扫描、扫描项、
   知识删除及兼容性排除/恢复接口；`originalsPath` 直接透传 Agent。
+- 已代理逻辑知识库 CRUD、成员分页和原子批量更新；Java 不持久化成员关系。
 - 不解析 PDF、不生成向量、不拥有 Prompt 或模型逻辑，也不建立重复的论文数据库。
 
 ### Python Agent
 
 - 是论文文件及 AI 领域数据的唯一事实来源。
-- 管理原件登记、扫描任务、论文、入库任务、chunk、会话、消息、Run、工具调用和引用，并
+- 管理原件登记、扫描任务、论文、逻辑知识库及成员、入库任务、chunk、会话、消息、Run、工具调用和引用，并
   负责状态筛选、扫描对账与知识删除的真实语义。
 - 承担 PDF 解析、embedding、Qdrant 与 BM25 检索、RRF 融合、Rerank、Tool Calling、Prompt
   和模型适配。
@@ -106,19 +108,23 @@ flowchart LR
 ### 流式问答
 
 1. 浏览器经 Java 发起 POST SSE 请求。
-2. Python 创建 Agent Run，并由 DeepSeek 原生 Tool Calling 决定是否调用只读工具。
-3. `knowledge_base_search` 从 Qdrant 和 Agent 进程内按论文版本缓存的 BM25 倒排索引各召回
+2. Python 将请求解析为 `ALL`、`KNOWLEDGE_BASE` 或 `PAPERS` 范围，在建流前固定当时可检索
+   `paperIds` 的快照；知识库不存在或没有可检索成员时分别返回稳定的 404/409 错误。
+3. Python 创建 Agent Run，并由 DeepSeek 原生 Tool Calling 决定是否调用只读工具。
+4. `knowledge_base_search` 从 Qdrant 和 Agent 进程内按论文版本缓存的 BM25 倒排索引各召回
    候选；BM25 仅在论文首次参与检索或新一轮入库成功后从 MySQL 加载并分词对应 chunk，常规
    查询只校验轻量版本并遍历查询词的 postings。两路结果经 RRF 合并去重后截取候选，再由
    本地 reranker 排序。
-4. 工具证据携带 paper、page、quote、chunk 和 citation ID。
-5. Python 只接受能够映射到本轮工具证据的论文引用。
-6. Java 原样转发 SSE 事件，React 展示工具状态、回答和可跳页引用。
+5. `knowledge_base_search` 与 `document_lookup` 的最终论文集合均由 Run 快照强制注入，并在
+   执行前复核论文仍为 `READY + AVAILABLE + searchable`；模型不能扩大范围。
+6. 工具证据携带 paper、page、quote、chunk 和 citation ID。
+7. Python 只接受能够映射到本轮工具证据的论文引用。
+8. Java 原样转发 SSE 事件，React 展示工具状态、回答和可跳页引用。
 
 ### 当前页面多轮会话
 
 React 为每次进入问答页生成独立会话 ID，同页连续提问复用该 ID，并按轮保留问题、回答、
-工具状态和引用。新建会话或切换论文范围会清空页面问答与草稿；新建会话保留论文选择。
+工具状态和引用。新建会话或切换任意问答范围会清空页面问答与草稿；新建会话保留范围选择。
 刷新或离开问答页后重新进入不恢复旧会话。请求期间禁止再次提交、切换范围和新建会话，
 离开页面会取消请求。旧 `single-paper-demo` 数据保留，但新页面不再复用它。
 
@@ -132,10 +138,10 @@ Python 创建 Run 时，在同一事务中读取该会话最近 10 个完整的 
 历史读取失败按数据库错误处理，不静默丢弃上下文。数据库记录不会因窗口截取而删除。
 
 模型输入依次为系统规则、历史 user/assistant 消息和当前问题；历史用户消息沿用
-`question` 与 `selectedPaperIds` JSON，使用当前页面会话固定的论文范围。历史助手文本
+`question`、`selectedPaperIds` 和范围信息 JSON。历史助手文本
 去除旧引用标记，历史工具调用与工具结果不重放。历史只帮助理解指代及构造完整检索问题，
-论文事实仍须本轮检索与引用校验。该范围约束由当前页面切换即新会话保证，尚未增加服务端
-论文范围快照、会话读取 API 或跨论文会话管理。
+论文事实仍须本轮检索与引用校验。历史只复用相同规范范围键的已完成 Run；迁移前 Run 标记
+为 `LEGACY`，不会参与新范围上下文。会话读取 API 与刷新恢复仍未实现。
 
 离线评测使用仓库内固定的合成问题集，按合成论文标题解析当前 paper ID，分别执行 Dense
 与 Hybrid 检索并计算 Recall@20、MRR 和来源追踪完整率。评测只读 MySQL/Qdrant，不保存
@@ -153,7 +159,8 @@ Python 创建 Run 时，在同一事务中读取该会话最近 10 个完整的 
 | Qdrant 向量 | Docker named volume `airesearcher_qdrant_data` |
 | 本机秘密 | 被 Git 忽略的根目录 `.env` |
 
-PDF 直接存放在原件库根目录，仅 `.staging/` 用于上传暂存；`.private/` 被 Git 忽略且不得提交。旧
+PDF 可位于原件库任意子目录，仅 `.staging/` 用于上传暂存；文件夹层级没有逻辑知识库语义。
+`.private/` 被 Git 忽略且不得提交。旧
 `AIRESEARCHER_STORAGE_DIR` 只用于迁移期兼容读取，不是新原件的落盘位置。
 
 `infrastructure/` 只保存 Compose 配置，不保存数据库或向量运行数据。当前 Java 没有业务
@@ -168,6 +175,8 @@ API Key、密码、Token、数据库、向量、模型、缓存和日志。
 - Java 调用 Python：`/agent-api/v1/**`。
 - 两层 API 均已提供 library files、`libraryState`、manual ingestion、scan、知识删除和
   exclusion/restore；React 通过 Java BFF 使用前五项，exclusion/restore 作为兼容接口保留。
+- 两层 API 均提供逻辑知识库 CRUD、成员分页和原子批量更新；Chat 的 `knowledgeBaseId` 与
+  非空 `paperIds` 互斥。
 - `LibraryInfo.originalsPath` 返回扫描器实际遍历的论文目录，与 `rootPath` 相同；网页上传直接写入该目录。
 - 普通 Java JSON API 使用 `Result<T>`；Agent JSON API 使用直接 DTO。
 - SSE、PDF 下载和健康检查不包装 `Result<T>`。
@@ -181,6 +190,8 @@ API Key、密码、Token、数据库、向量、模型、缓存和日志。
 ## 6. 运行不变量
 
 - 只有 `READY + AVAILABLE + searchable=true` 的论文能够参与检索。
+- 一个 Paper 可以加入多个逻辑知识库；成员关系不复制 PDF、chunk 或向量。删除知识库只删除
+  集合与成员关系，删除 Paper 会级联清理其全部成员关系。
 - `MISSING`、`REPLACED` 与 `EXCLUDED` 均不可检索；原件缺失不会自动删除 Paper、chunk 或
   向量，只有显式知识删除才清理它们。兼容性排除保留原件和最小登记信息，并清理 chunk 与
   Qdrant 向量。

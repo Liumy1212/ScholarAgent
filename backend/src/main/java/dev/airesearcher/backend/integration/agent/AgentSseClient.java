@@ -73,12 +73,19 @@ public class AgentSseClient {
     }
 
     private StreamOpenException mapResponseFailure(WebClientResponseException exception) {
-        if (exception.getStatusCode().value() == 400) {
+        if (exception.getStatusCode().value() == 400
+                || exception.getStatusCode().value() == 404
+                || exception.getStatusCode().value() == 409) {
             AgentStreamOpenError downstreamError = readDownstreamError(exception);
             if (downstreamError != null && downstreamError.message() != null
                     && !downstreamError.message().isBlank()) {
+                ResultCode code = switch (downstreamError.code()) {
+                    case "KNOWLEDGE_BASE_NOT_FOUND" -> ResultCode.KNOWLEDGE_BASE_NOT_FOUND;
+                    case "KNOWLEDGE_BASE_NOT_SEARCHABLE" -> ResultCode.KNOWLEDGE_BASE_NOT_SEARCHABLE;
+                    default -> ResultCode.INVALID_REQUEST;
+                };
                 return new StreamOpenException(
-                        ResultCode.INVALID_REQUEST,
+                        code,
                         downstreamError.message(),
                         downstreamError.details()
                 );

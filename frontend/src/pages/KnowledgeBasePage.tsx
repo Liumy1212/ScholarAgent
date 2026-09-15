@@ -695,10 +695,10 @@ export function KnowledgeBasePage() {
         <div>
           <Tag color="blue">本地论文原件库</Tag>
           <Typography.Title id="knowledge-base-title" level={2}>
-            论文知识库
+            论文原件
           </Typography.Title>
           <Typography.Paragraph type="secondary">
-            原件登记与知识库入库彼此独立；只有你手动确认后，Worker 才会解析并建立向量索引。
+            原件登记与论文知识索引彼此独立；只有你手动确认后，Worker 才会解析并建立向量索引。
           </Typography.Paragraph>
         </div>
 

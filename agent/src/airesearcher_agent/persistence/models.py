@@ -50,6 +50,37 @@ class PaperRecord(Base):
     )
 
 
+class KnowledgeBaseRecord(Base):
+    __tablename__ = "knowledge_bases"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class KnowledgeBasePaperRecord(Base):
+    __tablename__ = "knowledge_base_papers"
+    __table_args__ = (Index("ix_knowledge_base_papers_paper", "paper_id"),)
+
+    knowledge_base_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    paper_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class LibraryFileRecord(Base):
     __tablename__ = "library_files"
     __table_args__ = (
@@ -280,6 +311,10 @@ class AgentRunRecord(Base):
     tool_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False, default="ALL")
+    scope_key: Mapped[str] = mapped_column(String(255), nullable=False, default="ALL")
+    scope_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    paper_ids_snapshot: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

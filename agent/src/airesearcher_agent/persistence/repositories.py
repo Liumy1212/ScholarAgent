@@ -145,7 +145,9 @@ def list_paper_views(session: Session) -> tuple[PaperView, ...]:
     return tuple(paper_view(session, paper) for paper in papers)
 
 
-def ready_paper_ids(session: Session, requested: tuple[str, ...]) -> tuple[str, ...]:
+def ready_paper_ids(
+    session: Session, requested: tuple[str, ...], *, allow_all: bool = True
+) -> tuple[str, ...]:
     statement = (
         select(PaperRecord.id)
         .join(LibraryFileRecord, LibraryFileRecord.paper_id == PaperRecord.id)
@@ -157,6 +159,8 @@ def ready_paper_ids(session: Session, requested: tuple[str, ...]) -> tuple[str, 
     )
     if requested:
         statement = statement.where(PaperRecord.id.in_(requested))
+    elif not allow_all:
+        return ()
     return tuple(session.scalars(statement).all())
 
 

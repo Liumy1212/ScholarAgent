@@ -13,6 +13,13 @@ POST   /api/v1/library/files/{libraryFileId}/ingestion
 POST   /api/v1/library/scans
 GET    /api/v1/library/scans/{scanId}
 GET    /api/v1/library/scans/{scanId}/items
+GET    /api/v1/knowledge-bases
+POST   /api/v1/knowledge-bases
+GET    /api/v1/knowledge-bases/{knowledgeBaseId}
+PATCH  /api/v1/knowledge-bases/{knowledgeBaseId}
+DELETE /api/v1/knowledge-bases/{knowledgeBaseId}
+GET    /api/v1/knowledge-bases/{knowledgeBaseId}/papers
+PATCH  /api/v1/knowledge-bases/{knowledgeBaseId}/papers
 POST   /api/v1/papers
 GET    /api/v1/papers
 GET    /api/v1/papers/{paperId}
@@ -41,3 +48,6 @@ POST   /api/v1/conversations/{conversationId}/messages/stream
 `503` 映射为 Web `502 AGENT_UNAVAILABLE`，协议错误和超时分别映射为 `502 AGENT_ERROR`
 与 `504 AGENT_TIMEOUT`。上传接受 PDF、octet-stream 或未提供 MIME，但仍校验 `.pdf`、
 50 MB 上限和 `%PDF-` 签名。exclusion/restore 继续作为兼容接口保留。
+
+知识库普通响应继续使用 `Result<T>`；成员批量更新由 Java 校验数组上限、重复和交集后原样
+转发。Chat 保留必填 `paperIds`，并允许用互斥的 `knowledgeBaseId` 选择整个逻辑知识库。

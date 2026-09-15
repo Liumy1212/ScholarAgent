@@ -22,7 +22,8 @@ import {
   StreamOpenErrorResponse,
 } from '../api/errors';
 import { listPapers, paperFileUrl, PaperApiError } from '../api/papers';
-import type { AnswerMode, Paper } from '../api/types';
+import { listKnowledgeBases } from '../api/knowledgeBases';
+import type { AnswerMode, KnowledgeBase, Paper } from '../api/types';
 import {
   applyChatEvent,
   confirmStreamOpened,
@@ -282,12 +283,21 @@ export function ChatPage() {
   const [pending, setPending] = useState(false);
   const state = turns.at(-1)?.state ?? initialChatState;
   const [readyPapers, setReadyPapers] = useState<Paper[]>([]);
-  const [selectedPaperId, setSelectedPaperId] = useState<string | undefined>();
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [selectedScope, setSelectedScope] = useState('all');
   const [paperLoading, setPaperLoading] = useState(true);
+  const [knowledgeBaseLoading, setKnowledgeBaseLoading] = useState(true);
   const [paperError, setPaperError] = useState<string | null>(null);
+  const [knowledgeBaseError, setKnowledgeBaseError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const active = pending || isActive(state);
-  const canSubmit = draft.trim().length > 0 && !active && !paperLoading;
+  const selectedPaperId = selectedScope.startsWith('paper:') ? selectedScope.slice(6) : undefined;
+  const selectedKnowledgeBaseId = selectedScope.startsWith('kb:') ? selectedScope.slice(3) : undefined;
+  const selectedKnowledgeBase = knowledgeBases.find((item) => item.knowledgeBaseId === selectedKnowledgeBaseId);
+  const scopeReady = selectedKnowledgeBaseId
+    ? !knowledgeBaseLoading && Boolean(selectedKnowledgeBase?.searchablePaperCount)
+    : !paperLoading;
+  const canSubmit = draft.trim().length > 0 && !active && scopeReady;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -296,11 +306,7 @@ export function ChatPage() {
         if (controller.signal.aborted) return;
         const ready = result.items.filter((paper) => paper.searchable);
         setReadyPapers(ready);
-        setSelectedPaperId((current) =>
-          current && ready.some((paper) => paper.paperId === current)
-            ? current
-            : ready[0]?.paperId,
-        );
+        setSelectedScope((current) => current === 'all' && ready[0] ? `paper:${ready[0].paperId}` : current);
         setPaperError(null);
       })
       .catch((error: unknown) => {
@@ -321,13 +327,22 @@ export function ChatPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void listKnowledgeBases(0, 200, controller.signal)
+      .then((result) => { setKnowledgeBases(result.items); setKnowledgeBaseError(null); })
+      .catch((error: unknown) => { if (!controller.signal.aborted) setKnowledgeBaseError(paperLoadError(error)); })
+      .finally(() => { if (!controller.signal.aborted) setKnowledgeBaseLoading(false); });
+    return () => controller.abort();
+  }, []);
+
   const selectedPaper = readyPapers.find(
     (paper) => paper.paperId === selectedPaperId,
   );
 
   const submit = async () => {
     const content = draft.trim();
-    if (!content || paperLoading || controllerRef.current) {
+    if (!content || !scopeReady || controllerRef.current) {
       return;
     }
 
@@ -355,6 +370,7 @@ export function ChatPage() {
         requestId,
         content,
         paperIds: selectedPaperId ? [selectedPaperId] : [],
+        knowledgeBaseId: selectedKnowledgeBaseId,
         signal: controller.signal,
         onOpen: (responseRequestId) => {
           if (controllerRef.current !== controller || controller.signal.aborted) return;
@@ -434,14 +450,14 @@ export function ChatPage() {
     <main className="page-shell" aria-labelledby="chat-title">
       <Space direction="vertical" size={24} className="full-width">
         <div>
-          <Tag color={selectedPaper ? 'geekblue' : 'default'}>
-            {selectedPaper ? selectedPaper.title : '全部可检索论文'}
+          <Tag color={selectedPaper || selectedKnowledgeBase ? 'geekblue' : 'default'}>
+            {selectedPaper?.title ?? selectedKnowledgeBase?.name ?? '全部可检索论文'}
           </Tag>
           <Typography.Title id="chat-title" level={2}>
             论文问答
           </Typography.Title>
           <Typography.Paragraph type="secondary">
-            仅最近 10 轮成功问答参与上下文，并受文本总量限制。刷新或离开此页后开启新会话，切换论文也会开启新会话。
+            仅最近 10 轮同范围的成功问答参与上下文，并受文本总量限制。刷新、离开此页或切换范围都会开启新会话。
           </Typography.Paragraph>
         </div>
 
@@ -450,30 +466,44 @@ export function ChatPage() {
             <Form.Item label="检索范围">
               <Select
                 aria-label="检索范围"
-                loading={paperLoading}
-                allowClear
-                disabled={active || paperLoading}
-                value={selectedPaperId}
-                placeholder="全部可检索论文"
-                options={readyPapers.map((paper) => ({
-                  value: paper.paperId,
-                  label: `${paper.title}${paper.pageCount ? ` · ${paper.pageCount} 页` : ''}`,
-                }))}
+                loading={paperLoading && knowledgeBaseLoading}
+                disabled={active}
+                value={selectedScope}
+                allowClear={selectedScope !== 'all'}
+                options={[
+                  { label: '全部', options: [{ value: 'all', label: '全部可检索论文' }] },
+                  { label: '知识库', options: knowledgeBases.map((base) => ({
+                    value: `kb:${base.knowledgeBaseId}`,
+                    label: `${base.name} · ${base.searchablePaperCount}/${base.paperCount} 篇可检索`,
+                    disabled: base.searchablePaperCount === 0,
+                  })) },
+                  { label: '单篇论文', options: readyPapers.map((paper) => ({
+                    value: `paper:${paper.paperId}`,
+                    label: `${paper.title}${paper.pageCount ? ` · ${paper.pageCount} 页` : ''}`,
+                  })) },
+                ]}
                 onChange={(value: string | undefined) => {
-                  if (controllerRef.current || value === selectedPaperId) return;
-                  setSelectedPaperId(value);
+                  const nextScope = value ?? 'all';
+                  if (controllerRef.current || nextScope === selectedScope) return;
+                  setSelectedScope(nextScope);
                   newConversation();
                 }}
               />
               {paperError ? (
                 <Alert className="field-alert" type="warning" showIcon message={paperError} />
               ) : null}
+              {knowledgeBaseError ? (
+                <Alert className="field-alert" type="warning" showIcon message={`知识库列表读取失败：${knowledgeBaseError}`} />
+              ) : null}
+              {selectedKnowledgeBase && selectedKnowledgeBase.searchablePaperCount === 0 ? (
+                <Alert className="field-alert" type="info" showIcon message="该知识库当前没有可检索论文。" />
+              ) : null}
               {!paperLoading && readyPapers.length === 0 ? (
                 <Alert
                   className="field-alert"
                   type="info"
                   showIcon
-                  message="知识库中还没有可检索论文；此时只能得到模型知识回答。"
+                  message="当前没有可检索论文；全部论文范围仍可用于普通模型回答。"
                 />
               ) : null}
             </Form.Item>
@@ -503,7 +533,7 @@ export function ChatPage() {
                 </Button>
               ) : null}
               <Typography.Text type="secondary">
-                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : '检索全部可检索论文'}
+                {selectedPaper ? `限定 paperId：${selectedPaper.paperId}` : selectedKnowledgeBase ? `限定知识库：${selectedKnowledgeBase.name}` : '检索全部可检索论文'}
               </Typography.Text>
             </Flex>
           </Form>

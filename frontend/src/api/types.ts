@@ -1,6 +1,7 @@
 export interface ChatStreamRequest {
   content: string;
   paperIds: string[];
+  knowledgeBaseId?: string | null;
 }
 
 interface BaseSseEvent {
@@ -156,6 +157,40 @@ export interface Paper {
   createdAt: string;
   updatedAt: string;
   currentIngestion: IngestionSummary;
+}
+
+export interface KnowledgeBase {
+  knowledgeBaseId: string;
+  name: string;
+  paperCount: number;
+  searchablePaperCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeBasesPage {
+  items: KnowledgeBase[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface KnowledgeBasePapersPage {
+  items: Paper[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface KnowledgeBaseMembersUpdate {
+  knowledgeBase: KnowledgeBase;
+  addedPaperIds: string[];
+  removedPaperIds: string[];
+}
+
+export interface DeleteKnowledgeBaseData {
+  knowledgeBaseId: string;
+  deleted: true;
 }
 
 export interface LibraryFile {

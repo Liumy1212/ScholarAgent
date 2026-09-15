@@ -13,6 +13,13 @@ POST   /agent-api/v1/library/files/{libraryFileId}/ingestion
 POST   /agent-api/v1/library/scans
 GET    /agent-api/v1/library/scans/{scanId}
 GET    /agent-api/v1/library/scans/{scanId}/items
+GET    /agent-api/v1/knowledge-bases
+POST   /agent-api/v1/knowledge-bases
+GET    /agent-api/v1/knowledge-bases/{knowledgeBaseId}
+PATCH  /agent-api/v1/knowledge-bases/{knowledgeBaseId}
+DELETE /agent-api/v1/knowledge-bases/{knowledgeBaseId}
+GET    /agent-api/v1/knowledge-bases/{knowledgeBaseId}/papers
+PATCH  /agent-api/v1/knowledge-bases/{knowledgeBaseId}/papers
 POST   /agent-api/v1/papers
 GET    /agent-api/v1/papers
 GET    /agent-api/v1/papers/{paperId}
@@ -41,3 +48,7 @@ Java 调用 Agent 时必须传入 `X-Request-Id`。普通 JSON 响应使用直�
 任务、chunk 和向量，保留所有仍存在的 PDF；活动任务返回 `409 PAPER_BUSY`，Qdrant 或
 数据库不可用返回可重试的 `503`。上传接受 `application/pdf`、
 `application/octet-stream` 或未提供 MIME，但仍要求 `.pdf`、50 MB 上限和 `%PDF-` 签名。
+
+知识库名称经过 trim、Unicode NFC 和大小写不敏感唯一化；创建空库合法，成员更新使用互斥的
+`addPaperIds`/`removePaperIds` 并保持幂等。Chat 的 `knowledgeBaseId` 与非空 `paperIds` 互斥；
+知识库范围在建流前解析成员，空或全不可检索返回 `KNOWLEDGE_BASE_NOT_SEARCHABLE`。

@@ -89,6 +89,31 @@ function paperListResponse(
   );
 }
 
+function knowledgeBaseListResponse(init?: RequestInit, include = false): Response {
+  const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+  return new Response(
+    JSON.stringify({
+      code: 'SUCCESS',
+      message: 'Success.',
+      requestId,
+      data: {
+        items: include ? [{
+          knowledgeBaseId: 'kb-component-001',
+          name: '合成知识库',
+          paperCount: 2,
+          searchablePaperCount: 1,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:01:00Z',
+        }] : [],
+        total: include ? 1 : 0,
+        offset: 0,
+        limit: 200,
+      },
+    }),
+    { status: 200, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId } },
+  );
+}
+
 describe('ChatPage', () => {
   it('通过 POST SSE 展示回答、引用、requestId 和完成状态', async () => {
     let capturedRequestId = '';
@@ -96,6 +121,9 @@ describe('ChatPage', () => {
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         if (String(input) === '/api/v1/papers') {
           return paperListResponse(init, true);
+        }
+        if (String(input).startsWith('/api/v1/knowledge-bases')) {
+          return knowledgeBaseListResponse(init);
         }
         expect(String(input)).toMatch(/^\/api\/v1\/conversations\/[0-9a-f-]{36}\/messages\/stream$/);
         expect(init?.method).toBe('POST');
@@ -180,7 +208,7 @@ describe('ChatPage', () => {
     expect(screen.getAllByText('Synthetic Research Paper')).toHaveLength(2);
     expect(screen.getByText('“This is synthetic evidence.”')).toBeTruthy();
     expect(screen.getByText(`请求 ID：${capturedRequestId}`)).toBeTruthy();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('展示契约定义的建流失败和 requestId', async () => {
@@ -190,6 +218,9 @@ describe('ChatPage', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input) === '/api/v1/papers') {
           return paperListResponse(init);
+        }
+        if (String(input).startsWith('/api/v1/knowledge-bases')) {
+          return knowledgeBaseListResponse(init);
         }
         capturedRequestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -234,6 +265,9 @@ describe('ChatPage', () => {
         if (String(input) === '/api/v1/papers') {
           return paperListResponse(init);
         }
+        if (String(input).startsWith('/api/v1/knowledge-bases')) {
+          return knowledgeBaseListResponse(init);
+        }
         const requestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
         const partialStream = [
@@ -270,19 +304,50 @@ describe('ChatPage', () => {
   it('不允许选择 READY 但 searchable=false 的论文', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
-        paperListResponse(init, true, false),
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).startsWith('/api/v1/knowledge-bases')
+          ? knowledgeBaseListResponse(init)
+          : paperListResponse(init, true, false),
       ),
     );
     render(<ChatPage />);
 
     expect(
       await screen.findByText(
-        '知识库中还没有可检索论文；此时只能得到模型知识回答。',
+        '当前没有可检索论文；全部论文范围仍可用于普通模型回答。',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('检索全部可检索论文')).toBeTruthy();
+    expect(screen.getAllByText('全部可检索论文').length).toBeGreaterThan(0);
     expect(screen.queryByText('Synthetic Research Paper')).toBeNull();
+  });
+
+  it('选择知识库时只发送 knowledgeBaseId 并清空 paperIds', async () => {
+    let body: unknown;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
+      if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init, true);
+      body = JSON.parse(String(init?.body));
+      const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+      const events = [
+        envelope(requestId, 'run.started', 'evt-kb-start', 0, {}),
+        envelope(requestId, 'run.completed', 'evt-kb-done', 1, { answerMode: 'MODEL_KNOWLEDGE' }),
+      ];
+      return new Response(responseStream(events.map((event) => wire(event, input)).join('')), {
+        headers: { 'Content-Type': 'text/event-stream', 'X-Request-Id': requestId },
+      });
+    }));
+    render(<ChatPage />);
+
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: '检索范围' }));
+    fireEvent.click(await screen.findByText('合成知识库 · 1/2 篇可检索'));
+    await ask('跨论文比较');
+    await screen.findByText('回答生成完成');
+
+    expect(body).toEqual({
+      content: '跨论文比较',
+      paperIds: [],
+      knowledgeBaseId: 'kb-component-001',
+    });
   });
 });
 
@@ -298,6 +363,7 @@ it('保留多轮问答，新建、切换范围和重新进入均隔离会话', a
   const bodies: object[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
+    if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
     paths.push(String(input));
     bodies.push(JSON.parse(String(init?.body)) as object);
     const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -346,6 +412,7 @@ it('生成中禁用会话操作，停止后可继续，卸载取消待处理请�
   const signals: AbortSignal[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
+    if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
     const signal = init?.signal;
     if (!signal) throw new Error('missing signal');
     signals.push(signal);
