@@ -38,6 +38,10 @@
 - Make wire-contract changes in `contracts/` first and validate them before changing consumers.
 - Consumer implementations must not silently invent, rename, or reshape contract fields.
 - Add or update tests for behavior changes in the owning module.
+- Treat documentation as part of every functional change: in the same task, update the single
+  source of truth for affected current behavior, roadmap status, contracts, runtime configuration,
+  deployment steps, and module usage. Do not hand off a functional change while those documents
+  still describe the previous behavior.
 - Use only synthetic, redistributable fixtures.
 - Before handoff, run the checks documented by the nearest module instructions and
   `git diff --check`. Report checks that could not run.
