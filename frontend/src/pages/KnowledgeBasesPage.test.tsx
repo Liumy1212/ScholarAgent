@@ -10,11 +10,16 @@ function result(init: RequestInit | undefined, data: unknown, status = 200): Res
   });
 }
 
-function paper(paperId: string, title: string, searchable: boolean) {
+function paper(
+  paperId: string,
+  title: string,
+  searchable: boolean,
+  sourceStatus = 'AVAILABLE',
+) {
   return {
     paperId, title, authors: ['Synthetic Author'], publicationYear: 2026,
     fileName: `${paperId}.pdf`, fileSizeBytes: 1024,
-    libraryRelativePath: `uploads/${paperId}.pdf`, sourceStatus: 'AVAILABLE',
+    libraryRelativePath: `uploads/${paperId}.pdf`, sourceStatus,
     status: searchable ? 'READY' : 'PROCESSING', searchable,
     pageCount: searchable ? 2 : null,
     createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:01:00Z',
@@ -23,7 +28,11 @@ function paper(paperId: string, title: string, searchable: boolean) {
 }
 
 it('完成知识库创建、重命名、批量添加、批量移除和删除流程', async () => {
-  const papers = [paper('paper-001', 'Paper One', true), paper('paper-002', 'Paper Two', false)];
+  const papers = [
+    paper('paper-001', 'Paper One', true),
+    paper('paper-002', 'Paper Two', false),
+    paper('paper-deleted', 'Deleted Paper', false, 'MISSING'),
+  ];
   const createdBase = {
     knowledgeBaseId: 'kb-001', name: '初始知识库', paperCount: 1, searchablePaperCount: 1,
     createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:01:00Z',
@@ -74,6 +83,7 @@ it('完成知识库创建、重命名、批量添加、批量移除和删除流�
   expect(await screen.findByText('初始知识库')).toBeTruthy();
 
   fireEvent.mouseDown(screen.getByRole('combobox', { name: '添加论文' }));
+  expect(screen.queryByText('Deleted Paper · PROCESSING')).toBeNull();
   fireEvent.click(await screen.findByText('Paper One · READY'));
   fireEvent.click(await screen.findByText('Paper Two · PROCESSING'));
   fireEvent.click(screen.getByRole('button', { name: '添加所选论文' }));

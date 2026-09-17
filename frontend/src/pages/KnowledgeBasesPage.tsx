@@ -65,7 +65,9 @@ export function KnowledgeBasesPage() {
 
   const availableOptions = useMemo(() => {
     const memberIds = new Set(members.map((paper) => paper.paperId));
-    return allPapers.filter((paper) => !memberIds.has(paper.paperId)).map((paper) => ({
+    return allPapers.filter((paper) =>
+      paper.sourceStatus === 'AVAILABLE' && !memberIds.has(paper.paperId)
+    ).map((paper) => ({
       value: paper.paperId, label: `${paper.title} · ${paper.status}`,
     }));
   }, [allPapers, members]);

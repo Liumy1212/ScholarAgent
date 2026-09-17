@@ -1,5 +1,6 @@
 package dev.airesearcher.backend.knowledgebase;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -18,6 +19,7 @@ public record KnowledgeBaseMembersRequest(
         removePaperIds = removePaperIds == null ? null : List.copyOf(removePaperIds);
     }
 
+    @JsonIgnore
     @AssertTrue(message = "addPaperIds and removePaperIds must not overlap")
     public boolean isDisjoint() {
         return addPaperIds == null || removePaperIds == null

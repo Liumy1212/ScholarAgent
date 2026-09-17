@@ -75,4 +75,30 @@ class KnowledgeBaseControllerTest {
                 org.mockito.ArgumentMatchers.anyString()
         );
     }
+
+    @Test
+    void acceptsValidMemberChangesAndForwardsRequestId() throws Exception {
+        KnowledgeBase base = new KnowledgeBase(
+                "kb-001", "合成知识库", 1, 1,
+                OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                OffsetDateTime.parse("2026-01-01T00:01:00Z")
+        );
+        KnowledgeBaseMembersRequest request = new KnowledgeBaseMembersRequest(
+                List.of("paper-001"), List.of()
+        );
+        when(service.updateMembers("kb-001", request, "req-kb-members-valid"))
+                .thenReturn(new KnowledgeBaseMembersUpdate(
+                        base, List.of("paper-001"), List.of()
+                ));
+
+        mockMvc.perform(patch("/api/v1/knowledge-bases/kb-001/papers")
+                        .header("X-Request-Id", "req-kb-members-valid")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"addPaperIds\":[\"paper-001\"],\"removePaperIds\":[]}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Request-Id", "req-kb-members-valid"))
+                .andExpect(jsonPath("$.data.addedPaperIds[0]").value("paper-001"));
+
+        verify(service).updateMembers("kb-001", request, "req-kb-members-valid");
+    }
 }
