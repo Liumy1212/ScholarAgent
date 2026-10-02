@@ -36,6 +36,8 @@ const routeDefinitions = [
   { suffix: "/knowledge-bases", methods: ["get", "post"], kind: "json", statusByMethod: { post: "201" } },
   { suffix: "/knowledge-bases/{knowledgeBaseId}", methods: ["get", "patch", "delete"], kind: "json" },
   { suffix: "/knowledge-bases/{knowledgeBaseId}/papers", methods: ["get", "patch"], kind: "json" },
+  { suffix: "/conversations", methods: ["get"], kind: "json" },
+  { suffix: "/conversations/{conversationId}", methods: ["get"], kind: "json" },
   {
     suffix: "/conversations/{conversationId}/messages/stream",
     methods: ["post"],
@@ -849,6 +851,14 @@ async function validateOpenApis() {
     "KnowledgeBasesPage",
     "KnowledgeBasePapersPage",
     "KnowledgeBaseMembersRequest",
+    "ConversationScopeType",
+    "ConversationScope",
+    "ConversationToolCall",
+    "ConversationCitation",
+    "ConversationTurn",
+    "ConversationSummary",
+    "ConversationsPage",
+    "ConversationDetail",
     "LibraryFile",
     "LibraryFilesPage",
     "LibraryScanFailure",
@@ -897,7 +907,7 @@ async function main() {
   await validateSseFixtures(validateEvent);
   await validateOpenApis();
   console.log("Contract validation passed:");
-  console.log("- 2 OpenAPI documents with 24 REST operations plus shared SSE");
+  console.log("- 2 OpenAPI documents with 26 REST operations plus shared SSE");
   console.log("- 2 JSON Schemas");
   console.log("- 6 valid event examples and 1 StreamOpenError example");
   console.log("- valid completed/failed streams and all invalid fixtures");

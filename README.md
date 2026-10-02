@@ -26,7 +26,8 @@ AIResearcher 是一个面向论文知识库与长期科研自动化的单仓库�
 - 兼容性上传仍可由 Python Worker 完成章节感知的页内切块、逐 Chunk 上下文化和后台建库。
 - 使用 BGE-M3/Qdrant 向量召回与 Agent 内 BM25 关键词召回，经 RRF 融合后本地 Rerank。
 - 使用 DeepSeek 原生 Tool Calling 选择知识库检索或文档查询工具。
-- 通过 SSE 返回工具状态、流式回答和可跳转到 PDF 页码的引用。
+- 通过 SSE 返回工具状态、流式回答和可跳转到 PDF 页码的引用；最近成功会话可在本机列表中
+  选择，并在刷新或重新进入问答页后恢复回答、工具状态和引用快照。
 - 使用 MySQL 保存论文、任务、会话、Run 和引用等 Agent 数据。
 
 ```text

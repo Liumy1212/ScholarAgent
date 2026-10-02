@@ -29,6 +29,8 @@ POST   /api/v1/papers/{paperId}/exclusion
 DELETE /api/v1/papers/{paperId}/exclusion
 GET    /api/v1/ingestion-jobs/{jobId}
 POST   /api/v1/ingestion-jobs/{jobId}/retry
+GET    /api/v1/conversations
+GET    /api/v1/conversations/{conversationId}
 POST   /api/v1/conversations/{conversationId}/messages/stream
 ```
 
@@ -51,3 +53,5 @@ POST   /api/v1/conversations/{conversationId}/messages/stream
 
 知识库普通响应继续使用 `Result<T>`；成员批量更新由 Java 校验数组上限、重复和交集后原样
 转发。Chat 保留必填 `paperIds`，并允许用互斥的 `knowledgeBaseId` 选择整个逻辑知识库。
+会话列表和详情同样使用 `Result<T>`；Java 校验 `offset`、`limit` 与会话 ID，转发请求 ID，
+但不持久化会话业务状态。

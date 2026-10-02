@@ -5,7 +5,34 @@ import {
   StreamOpenErrorResponse,
 } from './errors';
 import { consumeChatSseStream } from './sse';
-import type { ChatSseEvent, ChatStreamRequest } from './types';
+import { requestJson } from './papers';
+import type {
+  ChatSseEvent,
+  ChatStreamRequest,
+  ConversationDetail,
+  ConversationsPage,
+} from './types';
+
+export async function listConversations(
+  offset = 0,
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<ConversationsPage> {
+  const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  return (await requestJson<ConversationsPage>(`/api/v1/conversations?${query}`, { signal })).data;
+}
+
+export async function getConversation(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ConversationDetail> {
+  return (
+    await requestJson<ConversationDetail>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
+      { signal },
+    )
+  ).data;
+}
 
 interface StreamChatOptions {
   conversationId: string;

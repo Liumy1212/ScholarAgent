@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 
 from airesearcher_agent.api.errors import agent_error_handler, request_validation_error_handler
 from airesearcher_agent.api.routes import create_agent_router
+from airesearcher_agent.application.conversations import ConversationService
 from airesearcher_agent.application.errors import AgentError
 from airesearcher_agent.application.knowledge_bases import KnowledgeBaseService
 from airesearcher_agent.application.ports import ChatProvider
@@ -38,6 +39,7 @@ def create_app(
             services.library_lifecycle_service,
             services.library_scan_service,
             services.knowledge_base_service or KnowledgeBaseService(services.database),
+            services.conversation_service or ConversationService(services.database),
             resolve_chat_scopes=provider is None or runtime is not None,
         )
     )

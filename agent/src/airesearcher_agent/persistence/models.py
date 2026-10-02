@@ -293,6 +293,7 @@ class AgentRunRecord(Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     conversation_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("conversations.id", ondelete="CASCADE"),

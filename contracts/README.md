@@ -10,6 +10,8 @@ AIResearcher 的 Agent API、浏览器 Web API 和 SSE 共享机器可读契约�
 Chat 保留必填 `paperIds` 并新增互斥的 `knowledgeBaseId`。论文原件库日常操作修复的契约包括：`libraryState` 服务端筛选、`originalsPath`、
 `DELETE /papers/{paperId}` 知识删除和宽松上传 MIME 均已冻结，Python Agent、Java BFF 与
 React 已完成消费，并通过模块测试及合成 PDF 全栈验收。兼容性 exclusion/restore 接口继续保留。
+阶段 1.5 首批新增只读会话列表与详情：Agent 返回直接 DTO，Web 返回 `Result<T>`，历史中的
+`requestId` 与引用 `paperId` 均允许为 `null`。
 
 ## 目录结构
 
@@ -34,7 +36,7 @@ npm run validate
 
 校验覆盖两份 OpenAPI、JSON Schema、有效/无效事件、完整成功/失败流、`libraryState`
 有效/无效夹具、原件/手动入库/知识删除及知识库 DTO 对应关系、成员分页、名称冲突、
-Chat 范围互斥、筛选分页与冲突语义，以及
+Chat 范围互斥、会话分页和历史 DTO 对齐、筛选分页与冲突语义，以及
 `Result<T>`、PDF Range 和 SSE 边界。
 
 修改前阅读 [Contract instructions](AGENTS.md)。

@@ -219,6 +219,20 @@ C:\path\to\AIResearcher\scripts\start-dev.ps1 -EnvFile C:\private\airesearcher.e
 
 ## 3. 验证首次部署
 
+### 3.0 本地确定性回归
+
+在连接真实服务或使用合成论文进行冒烟前，可从仓库根目录运行阶段 1.5 的三端检查：
+
+```powershell
+.\scripts\check-phase-1-5.ps1
+```
+
+脚本不加载 `.env`，不连接 MySQL、Qdrant 或模型服务，也不读取论文目录。它依次执行契约校验、
+Agent 静态检查与测试、Backend `verify`、Frontend 静态检查/测试/生产构建和
+`git diff --check`。Maven 依赖缓存与 Frontend 构建输出位于被忽略的
+`.private/checks/phase-1-5/`；Backend 构建产物仍位于常规的 `backend/target/`。此检查覆盖
+确定性故障映射，但不能替代下文真实依赖、迁移、重启和 named volume 验收。
+
 ### 3.1 服务健康
 
 ```powershell
@@ -260,6 +274,17 @@ Copy-Item -LiteralPath $demoPdf -Destination (Join-Path .\.private\paper-library
    `AVAILABLE + NOT_INGESTED`。
 8. 对活动任务验证 `409 PAPER_BUSY`；若模拟 Qdrant 故障，确认返回可重试错误、Paper 保持
    不可检索、原件不受影响，服务恢复后重复删除可完成。
+9. 分别提交损坏、加密和无可提取文本的合成 PDF，确认任务以 `INVALID_PDF`、
+   `ENCRYPTED_PDF` 或 `PDF_HAS_NO_TEXT` 失败且不可重试；原件仍在，Paper 不可检索，数据库
+   没有发布该论文的 chunk，Qdrant 没有该论文向量。
+10. 在同一范围完成两轮合成问答，调用 `GET /api/v1/conversations?offset=0&limit=50`，确认列表
+   只包含至少一轮成功回答，并按最新完成时间排序。
+11. 刷新页面和离开后重新进入问答页，确认本机记住的会话恢复问题、回答、工具状态与引用；
+    失败、取消或未完成的流式文本不进入历史。
+12. 停止并重新启动 Agent、Backend 与 Frontend，再执行 `docker compose down`、`up -d`（不得
+    添加 `-v`），确认 named volume 中的会话和引用仍可读取。
+13. 若历史论文或知识库已不可检索，确认历史仍可查看但不能继续；已删除论文的引用不应生成
+    PDF 链接。
 
 复验只能使用合成或用户明确有权处理的论文；测试文件使用唯一名称，且不得通过清空数据库、
 Qdrant volume 或原件目录来准备环境。知识删除不等于原件删除：它只清理数据库知识对象和向量，
@@ -501,4 +526,7 @@ volume 排错。
 
 按顺序检查 React 终端、Java BFF、Agent API、MySQL 和 Qdrant。确认
 `VITE_API_PROXY_TARGET` 指向 Java，`AIRESEARCHER_AGENT_BASE_URL` 指向 Agent，并查看各终端
-中同一请求 ID 的错误信息。
+中同一请求 ID 的错误信息。Agent 问答日志可使用 `request_id`、`run_id` 和 `tool_call_id`
+串联运行与工具失败；Worker 日志可使用 `job_id`、`paper_id`、`worker_id` 和 `stage` 定位入库
+失败。日志刻意不输出问题正文、论文内容、工具参数、模型回答和底层依赖异常详情；需要检查
+私有输入时必须由用户在本机原始数据边界内显式完成。

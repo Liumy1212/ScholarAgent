@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatPage } from './ChatPage';
 
 function responseStream(text: string): ReadableStream<Uint8Array> {
@@ -114,6 +114,23 @@ function knowledgeBaseListResponse(init?: RequestInit, include = false): Respons
   );
 }
 
+function conversationListResponse(init?: RequestInit): Response {
+  const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+  return new Response(JSON.stringify({
+    code: 'SUCCESS',
+    message: 'Success.',
+    requestId,
+    data: { items: [], total: 0, offset: 0, limit: 50 },
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+  });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
 describe('ChatPage', () => {
   it('通过 POST SSE 展示回答、引用、requestId 和完成状态', async () => {
     let capturedRequestId = '';
@@ -124,6 +141,9 @@ describe('ChatPage', () => {
         }
         if (String(input).startsWith('/api/v1/knowledge-bases')) {
           return knowledgeBaseListResponse(init);
+        }
+        if (String(input).startsWith('/api/v1/conversations?')) {
+          return conversationListResponse(init);
         }
         expect(String(input)).toMatch(/^\/api\/v1\/conversations\/[0-9a-f-]{36}\/messages\/stream$/);
         expect(init?.method).toBe('POST');
@@ -208,7 +228,7 @@ describe('ChatPage', () => {
     expect(screen.getAllByText('Synthetic Research Paper')).toHaveLength(2);
     expect(screen.getByText('“This is synthetic evidence.”')).toBeTruthy();
     expect(screen.getByText(`请求 ID：${capturedRequestId}`)).toBeTruthy();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it('展示契约定义的建流失败和 requestId', async () => {
@@ -221,6 +241,9 @@ describe('ChatPage', () => {
         }
         if (String(input).startsWith('/api/v1/knowledge-bases')) {
           return knowledgeBaseListResponse(init);
+        }
+        if (String(input).startsWith('/api/v1/conversations?')) {
+          return conversationListResponse(init);
         }
         capturedRequestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -258,6 +281,46 @@ describe('ChatPage', () => {
     });
   });
 
+  it('展示可重试的模型服务失败并保留请求 ID', async () => {
+    let capturedRequestId = '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/papers') return paperListResponse(init);
+        if (String(input).startsWith('/api/v1/knowledge-bases')) {
+          return knowledgeBaseListResponse(init);
+        }
+        if (String(input).startsWith('/api/v1/conversations?')) {
+          return conversationListResponse(init);
+        }
+        capturedRequestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+        const events = [
+          envelope(capturedRequestId, 'run.started', 'evt-provider-start', 0, {}),
+          envelope(capturedRequestId, 'run.failed', 'evt-provider-failed', 1, {
+            code: 'PROVIDER_UNAVAILABLE',
+            message: '模型服务暂不可用',
+            retryable: true,
+          }),
+        ];
+        return new Response(responseStream(events.map((event) => wire(event, input)).join('')), {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'X-Request-Id': capturedRequestId,
+          },
+        });
+      }),
+    );
+    render(<ChatPage />);
+
+    await ask('模型失败场景');
+
+    expect(await screen.findByText('模型服务暂不可用')).toBeTruthy();
+    expect(screen.getByText('错误码：PROVIDER_UNAVAILABLE · 可以重试')).toBeTruthy();
+    expect(screen.getByText(`请求 ID：${capturedRequestId}`)).toBeTruthy();
+    expect(screen.getByText('失败')).toBeTruthy();
+  });
+
   it('在终止事件前断流时展示中断状态并保留已生成文本', async () => {
     vi.stubGlobal(
       'fetch',
@@ -267,6 +330,9 @@ describe('ChatPage', () => {
         }
         if (String(input).startsWith('/api/v1/knowledge-bases')) {
           return knowledgeBaseListResponse(init);
+        }
+        if (String(input).startsWith('/api/v1/conversations?')) {
+          return conversationListResponse(init);
         }
         const requestId =
           new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -304,11 +370,11 @@ describe('ChatPage', () => {
   it('不允许选择 READY 但 searchable=false 的论文', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
-        String(input).startsWith('/api/v1/knowledge-bases')
-          ? knowledgeBaseListResponse(init)
-          : paperListResponse(init, true, false),
-      ),
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+        if (String(input).startsWith('/api/v1/conversations?')) return conversationListResponse(init);
+        return paperListResponse(init, true, false);
+      }),
     );
     render(<ChatPage />);
 
@@ -326,6 +392,7 @@ describe('ChatPage', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
       if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init, true);
+      if (String(input).startsWith('/api/v1/conversations?')) return conversationListResponse(init);
       body = JSON.parse(String(init?.body));
       const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
       const events = [
@@ -358,12 +425,13 @@ async function ask(question: string) {
   fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 }
 
-it('保留多轮问答，新建、切换范围和重新进入均隔离会话', async () => {
+it('保留多轮问答，新建与切换范围会隔离会话', async () => {
   const paths: string[] = [];
   const bodies: object[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
     if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    if (String(input).startsWith('/api/v1/conversations?')) return conversationListResponse(init);
     paths.push(String(input));
     bodies.push(JSON.parse(String(init?.body)) as object);
     const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
@@ -400,12 +468,235 @@ it('保留多轮问答，新建、切换范围和重新进入均隔离会话', a
   await screen.findByText('回答第4轮');
   expect(paths[3]).not.toBe(paths[2]);
   expect(bodies[3]).toEqual({ content: '全部论文', paperIds: [] });
-  page.unmount();
+});
+
+it('自动恢复本机记住的成功会话并保留已删除论文的引用快照', async () => {
+  const conversationId = 'conversation-history-001';
+  localStorage.setItem('airesearcher.activeConversationId.v1', conversationId);
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v1/papers') return paperListResponse(init, true);
+    if (path.startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    const conversation = {
+      conversationId,
+      title: '历史问题',
+      preview: '历史回答',
+      scope: { type: 'PAPERS', scopeId: null, paperIds: ['paper-component-001'] },
+      turnCount: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:01:00Z',
+    };
+    const data = path.includes('?')
+      ? { items: [conversation], total: 1, offset: 0, limit: 50 }
+      : {
+          conversation,
+          turns: [{
+            runId: 'run-history-001',
+            requestId: null,
+            assistantMessageId: 'message-history-001',
+            question: '历史问题',
+            answer: '历史回答 [[citation:citation-history-001]]',
+            answerMode: 'KNOWLEDGE_BASE',
+            tools: [],
+            citations: [{
+              citationId: 'citation-history-001',
+              paperId: null,
+              paperTitle: '已删除论文',
+              pageNumber: 7,
+              quote: '仍然保留的历史证据',
+              chunkId: 'chunk-history-001',
+            }],
+            createdAt: '2026-01-01T00:00:00Z',
+            completedAt: '2026-01-01T00:01:00Z',
+          }],
+          totalTurns: 1,
+          truncated: false,
+        };
+    return new Response(JSON.stringify({ code: 'SUCCESS', message: 'Success.', requestId, data }), {
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    });
+  }));
+
   render(<ChatPage />);
-  await ask('重新进入');
-  await screen.findByText('回答第5轮');
-  expect(paths[4]).not.toBe(paths[3]);
-  expect(screen.queryByText('回答第4轮')).toBeNull();
+
+  await waitFor(() => expect(screen.getAllByText('历史问题').length).toBeGreaterThanOrEqual(2));
+  expect(screen.getByText('仍然保留的历史证据', { exact: false })).toBeTruthy();
+  expect(screen.getByText('第 7 页 · 原论文已不可用')).toBeTruthy();
+  expect(screen.queryByText('打开第 7 页')).toBeNull();
+  expect(screen.getByText('历史记录未保存请求 ID')).toBeTruthy();
+});
+
+it('stale localStorage 会回退到空白新会话', async () => {
+  localStorage.setItem('airesearcher.activeConversationId.v1', 'missing-conversation');
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v1/papers') return paperListResponse(init);
+    if (path.startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    if (path.includes('?')) return conversationListResponse(init);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    return new Response(JSON.stringify({
+      code: 'CONVERSATION_NOT_FOUND', message: 'Not found.', requestId,
+    }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    });
+  }));
+
+  render(<ChatPage />);
+
+  expect(await screen.findByText('提交问题后，连续问答会显示在这里')).toBeTruthy();
+  await waitFor(() => expect(localStorage.getItem('airesearcher.activeConversationId.v1')).not.toBe('missing-conversation'));
+});
+
+it('点击会话列表的“打开”按钮会切换到该会话', async () => {
+  const conversationId = 'conv-switch-001';
+  const conversation = {
+    conversationId,
+    title: '历史问题',
+    preview: '历史回答',
+    scope: { type: 'ALL', scopeId: null, paperIds: [] },
+    turnCount: 1,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:01:00Z',
+  };
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v1/papers') return paperListResponse(init, true);
+    if (path.startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    const data = path.includes('?')
+      ? { items: [conversation], total: 1, offset: 0, limit: 50 }
+      : {
+          conversation,
+          turns: [{
+            runId: 'run-switch-001',
+            requestId: 'req-switch-001',
+            assistantMessageId: 'message-switch-001',
+            question: '历史问题',
+            answer: '历史回答',
+            answerMode: 'MODEL_KNOWLEDGE',
+            tools: [],
+            citations: [],
+            createdAt: '2026-01-01T00:00:00Z',
+            completedAt: '2026-01-01T00:01:00Z',
+          }],
+          totalTurns: 1,
+          truncated: false,
+        };
+    return new Response(JSON.stringify({ code: 'SUCCESS', message: 'Success.', requestId, data }), {
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    });
+  }));
+
+  render(<ChatPage />);
+
+  const open = await screen.findByRole('button', { name: '打开' });
+  expect(screen.getAllByText('历史问题')).toHaveLength(1);
+  fireEvent.click(open);
+
+  expect(await screen.findByRole('button', { name: '当前会话' })).toBeTruthy();
+  expect(screen.getAllByText('历史问题').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText('请求 ID：req-switch-001')).toBeTruthy();
+});
+
+it('恢复 LEGACY 范围会话时提示范围不可继续并保持只读', async () => {
+  localStorage.setItem('airesearcher.activeConversationId.v1', 'conv-legacy-001');
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v1/papers') return paperListResponse(init, true);
+    if (path.startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    if (path.includes('?')) return conversationListResponse(init);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    return new Response(JSON.stringify({
+      code: 'SUCCESS',
+      message: 'Success.',
+      requestId,
+      data: {
+        conversation: {
+          conversationId: 'conv-legacy-001',
+          title: '历史问题',
+          preview: '历史回答',
+          scope: { type: 'LEGACY', scopeId: null, paperIds: [] },
+          turnCount: 1,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:01:00Z',
+        },
+        turns: [{
+          runId: 'run-legacy-001',
+          requestId: null,
+          assistantMessageId: 'message-legacy-001',
+          question: '历史问题',
+          answer: '历史回答',
+          answerMode: 'MODEL_KNOWLEDGE',
+          tools: [],
+          citations: [],
+          createdAt: '2026-01-01T00:00:00Z',
+          completedAt: '2026-01-01T00:01:00Z',
+        }],
+        totalTurns: 1,
+        truncated: false,
+      },
+    }), {
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    });
+  }));
+
+  render(<ChatPage />);
+
+  expect(await screen.findByText('历史检索范围当前不可继续')).toBeTruthy();
+  expect(screen.getByText('历史问答仍可查看。请选择有效范围并新建会话后再继续提问。')).toBeTruthy();
+  expect(screen.getByText('历史回答')).toBeTruthy();
+  expect((screen.getByLabelText('研究问题') as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.getByRole('button', { name: '开始生成' }).hasAttribute('disabled')).toBe(true);
+});
+
+it('恢复的会话超过 100 轮时展示截断提示', async () => {
+  localStorage.setItem('airesearcher.activeConversationId.v1', 'conv-truncated-001');
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v1/papers') return paperListResponse(init, true);
+    if (path.startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    if (path.includes('?')) return conversationListResponse(init);
+    const requestId = new Headers(init?.headers).get('X-Request-Id') ?? '';
+    return new Response(JSON.stringify({
+      code: 'SUCCESS',
+      message: 'Success.',
+      requestId,
+      data: {
+        conversation: {
+          conversationId: 'conv-truncated-001',
+          title: '截断问题',
+          preview: '截断回答',
+          scope: { type: 'ALL', scopeId: null, paperIds: [] },
+          turnCount: 101,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:01:00Z',
+        },
+        turns: [{
+          runId: 'run-truncated-001',
+          requestId: null,
+          assistantMessageId: 'message-truncated-001',
+          question: '截断问题',
+          answer: '截断回答',
+          answerMode: 'MODEL_KNOWLEDGE',
+          tools: [],
+          citations: [],
+          createdAt: '2026-01-01T00:00:00Z',
+          completedAt: '2026-01-01T00:01:00Z',
+        }],
+        totalTurns: 101,
+        truncated: true,
+      },
+    }), {
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    });
+  }));
+
+  render(<ChatPage />);
+
+  expect(await screen.findByText('该会话较长，当前仅展示最近 100 轮成功问答。')).toBeTruthy();
+  expect(screen.getByText('截断回答')).toBeTruthy();
 });
 
 it('生成中禁用会话操作，停止后可继续，卸载取消待处理请求', async () => {
@@ -413,6 +704,7 @@ it('生成中禁用会话操作，停止后可继续，卸载取消待处理请�
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/v1/papers') return paperListResponse(init, true);
     if (String(input).startsWith('/api/v1/knowledge-bases')) return knowledgeBaseListResponse(init);
+    if (String(input).startsWith('/api/v1/conversations?')) return conversationListResponse(init);
     const signal = init?.signal;
     if (!signal) throw new Error('missing signal');
     signals.push(signal);

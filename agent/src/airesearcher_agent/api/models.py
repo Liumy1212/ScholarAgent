@@ -61,6 +61,65 @@ class WireModel(BaseModel):
     )
 
 
+class ConversationScopeResponse(WireModel):
+    type: Literal["ALL", "KNOWLEDGE_BASE", "PAPERS", "LEGACY"]
+    scope_id: str | None
+    paper_ids: tuple[str, ...]
+
+
+class ConversationToolCallResponse(WireModel):
+    tool_call_id: str
+    tool_name: Literal["knowledge_base_search", "document_lookup"]
+    status: Literal["STARTED", "COMPLETED", "FAILED"]
+    error_code: str | None
+
+
+class ConversationCitationResponse(WireModel):
+    citation_id: str
+    paper_id: str | None
+    paper_title: str
+    page_number: int
+    quote: str
+    chunk_id: str
+
+
+class ConversationTurnResponse(WireModel):
+    run_id: str
+    request_id: str | None
+    assistant_message_id: str
+    question: str
+    answer: str
+    answer_mode: Literal["KNOWLEDGE_BASE", "DOCUMENT_LOOKUP", "MODEL_KNOWLEDGE"]
+    tools: tuple[ConversationToolCallResponse, ...]
+    citations: tuple[ConversationCitationResponse, ...]
+    created_at: datetime
+    completed_at: datetime
+
+
+class ConversationSummaryResponse(WireModel):
+    conversation_id: str
+    title: str
+    preview: str
+    scope: ConversationScopeResponse
+    turn_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationsPageResponse(WireModel):
+    items: tuple[ConversationSummaryResponse, ...]
+    total: int
+    offset: int
+    limit: int
+
+
+class ConversationDetailResponse(WireModel):
+    conversation: ConversationSummaryResponse
+    turns: tuple[ConversationTurnResponse, ...]
+    total_turns: int
+    truncated: bool
+
+
 class IngestionFailureResponse(WireModel):
     code: str
     message: str

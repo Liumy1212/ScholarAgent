@@ -20,6 +20,7 @@ class ChatPrompt:
     scope_type: str = "ALL"
     scope_key: str = "ALL"
     scope_id: str | None = None
+    request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -102,6 +102,7 @@ class StreamChatUseCase:
             scope_type=command.scope_type,
             scope_key=command.scope_key,
             scope_id=command.scope_id,
+            request_id=command.request_id,
         )
         answer_mode: AnswerMode | None = None
         provider_events = self._provider.stream(prompt)

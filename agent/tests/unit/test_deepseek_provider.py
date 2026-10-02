@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
@@ -148,6 +149,7 @@ def _prompt(run_id: str = "run-deepseek-test") -> ChatPrompt:
         assistant_message_id=f"msg-{run_id}",
         content="论文中的关键实验结果是什么？",
         paper_ids=("paper-ready",),
+        request_id=f"request-{run_id}",
     )
 
 
@@ -191,7 +193,11 @@ async def _collect(
     return [event async for event in provider.stream(prompt)]
 
 
-def test_native_knowledge_tool_call_is_scoped_persisted_and_cited(tmp_path: Path) -> None:
+def test_native_knowledge_tool_call_is_scoped_persisted_and_cited(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="airesearcher_agent.providers.deepseek")
     gateway = ScriptedGateway(
         [
             AssistantTurn(
@@ -220,6 +226,16 @@ def test_native_knowledge_tool_call_is_scoped_persisted_and_cited(tmp_path: Path
     assert [event.answer_mode for event in events if isinstance(event, AnswerCompleted)] == [
         "KNOWLEDGE_BASE"
     ]
+    log_text = caplog.text
+    assert "agent_run status=started stage=run_start" in log_text
+    assert "request_id=request-run-deepseek-test" in log_text
+    assert "run_id=run-deepseek-test" in log_text
+    assert "agent_tool status=completed" in log_text
+    assert "tool_name=knowledge_base_search" in log_text
+    assert "agent_run status=completed stage=completed" in log_text
+    assert "论文中的关键实验结果是什么" not in log_text
+    assert '"query":"result"' not in log_text
+    assert "17 percent" not in log_text
     function_definitions = [
         cast(dict[str, object], definition["function"])
         for definition in gateway.tool_definitions[0]
@@ -483,10 +499,13 @@ def test_follow_up_uses_persisted_history_and_only_current_evidence(tmp_path: Pa
 
 
 def test_history_database_failure_is_reported_without_calling_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
+    caplog.set_level(logging.INFO, logger="airesearcher_agent.providers.deepseek")
     gateway = ScriptedGateway([], [])
     provider, _ = _provider(tmp_path, gateway, RecordingRetrievalTools())
 
@@ -498,3 +517,7 @@ def test_history_database_failure_is_reported_without_calling_model(
         asyncio.run(_collect(provider, _prompt()))
     assert caught.value.code == "DATABASE_UNAVAILABLE"
     assert not gateway.complete_messages
+    assert "agent_run status=failed stage=run_start" in caplog.text
+    assert "request_id=request-run-deepseek-test" in caplog.text
+    assert "error_code=DATABASE_UNAVAILABLE retryable=true" in caplog.text
+    assert "synthetic failure" not in caplog.text

@@ -585,6 +585,41 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/KnowledgeBaseMembersUpdateResponse' }
         '404': { $ref: '#/components/responses/AgentErrorResponse' }
+  /agent-api/v1/conversations:
+    get:
+      tags: [Conversations]
+      operationId: listAgentConversations
+      summary: 分页列出至少包含一轮成功问答的会话
+      parameters:
+        - $ref: '#/components/parameters/RequiredRequestId'
+        - $ref: '#/components/parameters/ConversationOffset'
+        - $ref: '#/components/parameters/ConversationLimit'
+      responses:
+        '200':
+          description: 会话按最近成功完成时间倒序排列。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationsPage' } } }
+        '500': { $ref: '#/components/responses/AgentErrorResponse' }
+        '503': { $ref: '#/components/responses/AgentErrorResponse' }
+  /agent-api/v1/conversations/{conversationId}:
+    get:
+      tags: [Conversations]
+      operationId: getAgentConversation
+      summary: 恢复会话最近的成功问答
+      description: >-
+        仅返回最新 scopeKey 下最近 100 个 COMPLETED Run；失败、取消、运行中及其他范围的
+        Run 不进入恢复结果。迁移前 LEGACY 会话可查看但不得继续。
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/RequiredRequestId'
+      responses:
+        '200':
+          description: 会话详情与可恢复的成功问答。
+          headers: { X-Request-Id: { $ref: '#/components/headers/XRequestId' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationDetail' } } }
+        '404': { $ref: '#/components/responses/AgentErrorResponse' }
+        '500': { $ref: '#/components/responses/AgentErrorResponse' }
+        '503': { $ref: '#/components/responses/AgentErrorResponse' }
   /agent-api/v1/conversations/{conversationId}/messages/stream:
     post:
       tags: [Conversations]
@@ -633,6 +668,23 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/Identifier'
+    ConversationOffset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    ConversationLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
     KnowledgeBaseId:
       name: knowledgeBaseId
       in: path
@@ -1308,6 +1360,98 @@ components:
                 type: string
                 minLength: 1
                 maxLength: 1024
+    ConversationScopeType:
+      type: string
+      enum: [ALL, KNOWLEDGE_BASE, PAPERS, LEGACY]
+    ConversationScope:
+      type: object
+      additionalProperties: false
+      required: [type, scopeId, paperIds]
+      properties:
+        type: { $ref: '#/components/schemas/ConversationScopeType' }
+        scopeId:
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+        paperIds:
+          type: array
+          uniqueItems: true
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Identifier' }
+    ConversationToolCall:
+      type: object
+      additionalProperties: false
+      required: [toolCallId, toolName, status, errorCode]
+      properties:
+        toolCallId: { $ref: '#/components/schemas/Identifier' }
+        toolName: { type: string, enum: [knowledge_base_search, document_lookup] }
+        status: { type: string, enum: [STARTED, COMPLETED, FAILED] }
+        errorCode:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 128 }
+            - type: 'null'
+    ConversationCitation:
+      type: object
+      additionalProperties: false
+      required: [citationId, paperId, paperTitle, pageNumber, quote, chunkId]
+      properties:
+        citationId: { $ref: '#/components/schemas/Identifier' }
+        paperId:
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+        paperTitle: { type: string, minLength: 1, maxLength: 1024 }
+        pageNumber: { type: integer, minimum: 1 }
+        quote: { type: string, minLength: 1 }
+        chunkId: { $ref: '#/components/schemas/Identifier' }
+    ConversationTurn:
+      type: object
+      additionalProperties: false
+      required: [runId, requestId, assistantMessageId, question, answer, answerMode, tools, citations, createdAt, completedAt]
+      properties:
+        runId: { $ref: '#/components/schemas/Identifier' }
+        requestId:
+          oneOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+        assistantMessageId: { $ref: '#/components/schemas/Identifier' }
+        question: { type: string, minLength: 1, maxLength: 16000 }
+        answer: { type: string, minLength: 1 }
+        answerMode: { type: string, enum: [KNOWLEDGE_BASE, DOCUMENT_LOOKUP, MODEL_KNOWLEDGE] }
+        tools: { type: array, items: { $ref: '#/components/schemas/ConversationToolCall' } }
+        citations: { type: array, items: { $ref: '#/components/schemas/ConversationCitation' } }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    ConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [conversationId, title, preview, scope, turnCount, createdAt, updatedAt]
+      properties:
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        preview: { type: string, minLength: 1, maxLength: 160 }
+        scope: { $ref: '#/components/schemas/ConversationScope' }
+        turnCount: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ConversationsPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, offset, limit]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ConversationSummary' } }
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    ConversationDetail:
+      type: object
+      additionalProperties: false
+      required: [conversation, turns, totalTurns, truncated]
+      properties:
+        conversation: { $ref: '#/components/schemas/ConversationSummary' }
+        turns: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/ConversationTurn' } }
+        totalTurns: { type: integer, minimum: 1 }
+        truncated: { type: boolean }
     ChatStreamRequest:
       type: object
       additionalProperties: false

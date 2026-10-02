@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -15,7 +15,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { streamChat } from '../api/chat';
+import { getConversation, listConversations, streamChat } from '../api/chat';
 import {
   ChatTransportError,
   SseProtocolError,
@@ -23,7 +23,14 @@ import {
 } from '../api/errors';
 import { listPapers, paperFileUrl, PaperApiError } from '../api/papers';
 import { listKnowledgeBases } from '../api/knowledgeBases';
-import type { AnswerMode, KnowledgeBase, Paper } from '../api/types';
+import type {
+  AnswerMode,
+  ConversationDetail,
+  ConversationScope,
+  ConversationSummary,
+  KnowledgeBase,
+  Paper,
+} from '../api/types';
 import {
   applyChatEvent,
   confirmStreamOpened,
@@ -32,11 +39,38 @@ import {
   markStreamEnded,
   markStreamInterrupted,
   markStreamProtocolViolation,
+  restoreCompletedTurn,
   startChatRequest,
   type ChatState,
   type ChatStatus,
   type Citation,
 } from '../chat/chatState';
+
+const ACTIVE_CONVERSATION_KEY = 'airesearcher.activeConversationId.v1';
+
+function readRememberedConversationId(): string | null {
+  try {
+    const value = localStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    return value && value.length <= 128 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberConversationId(conversationId: string): void {
+  try {
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId);
+  } catch {
+    // 浏览器禁用本地存储时，当前页面内的会话仍可正常使用。
+  }
+}
+
+function scopeValue(scope: ConversationScope): string | null {
+  if (scope.type === 'ALL') return 'all';
+  if (scope.type === 'KNOWLEDGE_BASE' && scope.scopeId) return `kb:${scope.scopeId}`;
+  if (scope.type === 'PAPERS' && scope.paperIds.length === 1) return `paper:${scope.paperIds[0]}`;
+  return null;
+}
 
 interface ChatTurn {
   id: string;
@@ -122,7 +156,7 @@ function AnswerText({ answer, citations }: { answer: string; citations: readonly
     const citation = citationById.get(citationId);
     if (citation) {
       const index = citations.findIndex((item) => item.citationId === citationId) + 1;
-      content.push(
+      content.push(citation.paperId ? (
         <a
           key={`${citationId}-${match.index}`}
           className="inline-citation"
@@ -132,8 +166,16 @@ function AnswerText({ answer, citations }: { answer: string; citations: readonly
           title={`打开 ${citation.paperTitle} 第 ${citation.pageNumber} 页`}
         >
           [{index}]
-        </a>,
-      );
+        </a>
+      ) : (
+        <span
+          key={`${citationId}-${match.index}`}
+          className="inline-citation"
+          title={`${citation.paperTitle} 第 ${citation.pageNumber} 页（原论文已不可用）`}
+        >
+          [{index}]
+        </span>
+      ));
     }
     cursor = match.index + match[0].length;
     match = matcher.exec(answer);
@@ -151,12 +193,23 @@ function paperLoadError(error: unknown): string {
   return error instanceof Error ? error.message : '无法读取论文列表。';
 }
 
+function conversationLoadError(error: unknown): string {
+  if (error instanceof PaperApiError) {
+    return `${error.message}（${error.code}）`;
+  }
+  return error instanceof Error ? error.message : '无法读取会话列表。';
+}
+
 function ConversationTurn({ question, state }: { question: string; state: ChatState }) {
   const active = isActive(state);
   const statusPresentation = STATUS_PRESENTATION[state.status];
   const requestLabel = useMemo(
-    () => (state.requestId ? `请求 ID：${state.requestId}` : '尚未发起请求'),
-    [state.requestId],
+    () => (state.requestId
+      ? `请求 ID：${state.requestId}`
+      : state.status === 'completed'
+        ? '历史记录未保存请求 ID'
+        : '尚未发起请求'),
+    [state.requestId, state.status],
   );
   const latestTools = useMemo(() => {
     const tools = new Map<string, ChatState['tools'][number]>();
@@ -250,20 +303,26 @@ function ConversationTurn({ question, state }: { question: string; state: ChatSt
                     <Flex gap={8} align="center" wrap>
                       <Tag color="blue">引用 {index + 1}</Tag>
                       <Typography.Text strong>{citation.paperTitle}</Typography.Text>
-                      <a
-                        href={paperFileUrl(citation.paperId, citation.pageNumber)}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        打开第 {citation.pageNumber} 页
-                      </a>
+                      {citation.paperId ? (
+                        <a
+                          href={paperFileUrl(citation.paperId, citation.pageNumber)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          打开第 {citation.pageNumber} 页
+                        </a>
+                      ) : (
+                        <Typography.Text type="secondary">
+                          第 {citation.pageNumber} 页 · 原论文已不可用
+                        </Typography.Text>
+                      )}
                     </Flex>
                     <Divider className="citation-divider" />
                     <Typography.Paragraph className="citation-quote">
                       “{citation.quote}”
                     </Typography.Paragraph>
                     <Typography.Text type="secondary" className="citation-ids">
-                      Paper ID：{citation.paperId} · Chunk ID：{citation.chunkId}
+                      Paper ID：{citation.paperId ?? '已删除'} · Chunk ID：{citation.chunkId}
                     </Typography.Text>
                   </article>
                 </List.Item>
@@ -277,8 +336,10 @@ function ConversationTurn({ question, state }: { question: string; state: ChatSt
 }
 
 export function ChatPage() {
+  const rememberedConversationId = useRef(readRememberedConversationId());
+  const initialConversationId = useRef(rememberedConversationId.current ?? crypto.randomUUID());
   const [draft, setDraft] = useState('');
-  const [conversationId, setConversationId] = useState(() => crypto.randomUUID());
+  const [conversationId, setConversationId] = useState(initialConversationId.current);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [pending, setPending] = useState(false);
   const state = turns.at(-1)?.state ?? initialChatState;
@@ -289,15 +350,94 @@ export function ChatPage() {
   const [knowledgeBaseLoading, setKnowledgeBaseLoading] = useState(true);
   const [paperError, setPaperError] = useState<string | null>(null);
   const [knowledgeBaseError, setKnowledgeBaseError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationListLoading, setConversationListLoading] = useState(true);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const [restoringConversation, setRestoringConversation] = useState(false);
+  const [restoredScope, setRestoredScope] = useState<ConversationScope | null>(null);
+  const [historyTruncated, setHistoryTruncated] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const active = pending || isActive(state);
   const selectedPaperId = selectedScope.startsWith('paper:') ? selectedScope.slice(6) : undefined;
   const selectedKnowledgeBaseId = selectedScope.startsWith('kb:') ? selectedScope.slice(3) : undefined;
   const selectedKnowledgeBase = knowledgeBases.find((item) => item.knowledgeBaseId === selectedKnowledgeBaseId);
+  const restoredScopeUnavailable = restoredScope?.type === 'LEGACY'
+    || (restoredScope?.type === 'KNOWLEDGE_BASE'
+      && !knowledgeBaseLoading
+      && !knowledgeBases.some((item) => item.knowledgeBaseId === restoredScope.scopeId && item.searchablePaperCount > 0))
+    || (restoredScope?.type === 'PAPERS'
+      && (!scopeValue(restoredScope)
+        || (!paperLoading && restoredScope.paperIds.some(
+          (paperId) => !readyPapers.some((paper) => paper.paperId === paperId),
+        ))));
   const scopeReady = selectedKnowledgeBaseId
     ? !knowledgeBaseLoading && Boolean(selectedKnowledgeBase?.searchablePaperCount)
     : !paperLoading;
-  const canSubmit = draft.trim().length > 0 && !active && scopeReady;
+  const canSubmit = draft.trim().length > 0 && !active && scopeReady && !restoredScopeUnavailable;
+
+  const refreshConversations = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const result = await listConversations(0, 50, signal);
+      if (signal?.aborted) return;
+      setConversations(result.items);
+      setConversationError(null);
+    } catch (error) {
+      if (!signal?.aborted) setConversationError(conversationLoadError(error));
+    } finally {
+      if (!signal?.aborted) setConversationListLoading(false);
+    }
+  }, []);
+
+  const applyConversationDetail = useCallback((detail: ConversationDetail) => {
+    const restoredValue = scopeValue(detail.conversation.scope);
+    setConversationId(detail.conversation.conversationId);
+    rememberConversationId(detail.conversation.conversationId);
+    setTurns(detail.turns.map((turn) => ({
+      id: turn.runId,
+      question: turn.question,
+      state: restoreCompletedTurn(detail.conversation.conversationId, turn),
+    })));
+    setRestoredScope(detail.conversation.scope);
+    setHistoryTruncated(detail.truncated);
+    if (restoredValue) setSelectedScope(restoredValue);
+    setDraft('');
+  }, []);
+
+  const restoreConversation = useCallback(async (
+    targetConversationId: string,
+    signal?: AbortSignal,
+  ) => {
+    setRestoringConversation(true);
+    try {
+      const detail = await getConversation(targetConversationId, signal);
+      if (!signal?.aborted) applyConversationDetail(detail);
+    } finally {
+      if (!signal?.aborted) setRestoringConversation(false);
+    }
+  }, [applyConversationDetail]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshConversations(controller.signal);
+    const remembered = rememberedConversationId.current;
+    if (remembered) {
+      void restoreConversation(remembered, controller.signal).catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        const freshConversationId = crypto.randomUUID();
+        setConversationId(freshConversationId);
+        rememberConversationId(freshConversationId);
+        setTurns([]);
+        setRestoredScope(null);
+        setHistoryTruncated(false);
+        if (!(error instanceof PaperApiError && error.status === 404)) {
+          setConversationError(`上次会话无法恢复：${conversationLoadError(error)}`);
+        }
+      });
+    } else {
+      rememberConversationId(initialConversationId.current);
+    }
+    return () => controller.abort();
+  }, [refreshConversations, restoreConversation]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -306,7 +446,9 @@ export function ChatPage() {
         if (controller.signal.aborted) return;
         const ready = result.items.filter((paper) => paper.searchable);
         setReadyPapers(ready);
-        setSelectedScope((current) => current === 'all' && ready[0] ? `paper:${ready[0].paperId}` : current);
+        if (!rememberedConversationId.current) {
+          setSelectedScope((current) => current === 'all' && ready[0] ? `paper:${ready[0].paperId}` : current);
+        }
         setPaperError(null);
       })
       .catch((error: unknown) => {
@@ -386,6 +528,9 @@ export function ChatPage() {
       });
       currentState = markStreamEnded(currentState);
       publish();
+      if (currentState.status === 'completed') {
+        void refreshConversations();
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         currentState = markStreamInterrupted(
@@ -437,9 +582,20 @@ export function ChatPage() {
 
   const newConversation = () => {
     if (controllerRef.current) return;
-    setConversationId(crypto.randomUUID());
+    const nextConversationId = crypto.randomUUID();
+    setConversationId(nextConversationId);
+    rememberConversationId(nextConversationId);
     setTurns([]);
     setDraft('');
+    setRestoredScope(null);
+    setHistoryTruncated(false);
+  };
+
+  const selectConversation = (targetConversationId: string) => {
+    if (active || restoringConversation || targetConversationId === conversationId) return;
+    void restoreConversation(targetConversationId).catch((error: unknown) => {
+      setConversationError(`会话无法恢复：${conversationLoadError(error)}`);
+    });
   };
 
   const stop = () => {
@@ -457,9 +613,60 @@ export function ChatPage() {
             论文问答
           </Typography.Title>
           <Typography.Paragraph type="secondary">
-            仅最近 10 轮同范围的成功问答参与上下文，并受文本总量限制。刷新、离开此页或切换范围都会开启新会话。
+            仅最近 10 轮同范围的成功问答参与上下文，并受 24,000 字符总量限制。刷新或重新进入页面会恢复本机记住的上次成功会话。
           </Typography.Paragraph>
         </div>
+
+        <Card
+          className="surface-card"
+          title="最近会话"
+          extra={<Button size="small" onClick={() => void refreshConversations()} disabled={active}>刷新</Button>}
+        >
+          {conversationError ? (
+            <Alert className="field-alert" type="warning" showIcon message={conversationError} />
+          ) : null}
+          {conversationListLoading ? (
+            <Spin size="small" />
+          ) : conversations.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有成功完成的会话" />
+          ) : (
+            <List
+              dataSource={conversations}
+              renderItem={(conversation) => (
+                <List.Item
+                  key={conversation.conversationId}
+                  actions={[
+                    <Button
+                      key="open"
+                      type={conversation.conversationId === conversationId ? 'primary' : 'link'}
+                      disabled={active || restoringConversation}
+                      onClick={() => selectConversation(conversation.conversationId)}
+                    >
+                      {conversation.conversationId === conversationId ? '当前会话' : '打开'}
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={conversation.title}
+                    description={`${conversation.preview} · ${conversation.turnCount} 轮`}
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </Card>
+
+        {historyTruncated ? (
+          <Alert type="info" showIcon message="该会话较长，当前仅展示最近 100 轮成功问答。" />
+        ) : null}
+        {restoredScopeUnavailable ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="历史检索范围当前不可继续"
+            description="历史问答仍可查看。请选择有效范围并新建会话后再继续提问。"
+          />
+        ) : null}
 
         <Card className="surface-card">
           <Form layout="vertical" onFinish={() => void submit()}>
@@ -467,7 +674,7 @@ export function ChatPage() {
               <Select
                 aria-label="检索范围"
                 loading={paperLoading && knowledgeBaseLoading}
-                disabled={active}
+                disabled={active || restoringConversation}
                 value={selectedScope}
                 allowClear={selectedScope !== 'all'}
                 options={[
@@ -514,7 +721,7 @@ export function ChatPage() {
                 onChange={(event) => setDraft(event.target.value)}
                 autoSize={{ minRows: 4, maxRows: 10 }}
                 placeholder="例如：论文第二页报告的实验提升是多少？请给出引用。"
-                disabled={active}
+                disabled={active || restoringConversation || restoredScopeUnavailable}
               />
             </Form.Item>
             <Flex gap={12} wrap align="center">
@@ -526,7 +733,7 @@ export function ChatPage() {
               >
                 开始生成
               </Button>
-              <Button onClick={newConversation} disabled={active}>新建会话</Button>
+              <Button onClick={newConversation} disabled={active || restoringConversation}>新建会话</Button>
               {active ? (
                 <Button danger onClick={stop}>
                   停止生成

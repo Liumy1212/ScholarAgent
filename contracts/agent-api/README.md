@@ -29,6 +29,8 @@ POST   /agent-api/v1/papers/{paperId}/exclusion
 DELETE /agent-api/v1/papers/{paperId}/exclusion
 GET    /agent-api/v1/ingestion-jobs/{jobId}
 POST   /agent-api/v1/ingestion-jobs/{jobId}/retry
+GET    /agent-api/v1/conversations
+GET    /agent-api/v1/conversations/{conversationId}
 POST   /agent-api/v1/conversations/{conversationId}/messages/stream
 ```
 
@@ -52,3 +54,6 @@ Java 调用 Agent 时必须传入 `X-Request-Id`。普通 JSON 响应使用直�
 知识库名称经过 trim、Unicode NFC 和大小写不敏感唯一化；创建空库合法，成员更新使用互斥的
 `addPaperIds`/`removePaperIds` 并保持幂等。Chat 的 `knowledgeBaseId` 与非空 `paperIds` 互斥；
 知识库范围在建流前解析成员，空或全不可检索返回 `KNOWLEDGE_BASE_NOT_SEARCHABLE`。
+
+会话列表默认最多 50 条、上限 200 条，按最近完成时间倒序；详情仅包含最新范围的成功 Run，
+最多返回最近 100 轮并通过 `totalTurns`、`truncated` 标记截断。失败、取消和未完成 Run 不返回。

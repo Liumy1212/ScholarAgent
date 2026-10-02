@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from airesearcher_agent.application.conversations import ConversationService
 from airesearcher_agent.application.knowledge_bases import KnowledgeBaseService
 from airesearcher_agent.application.library_files import LibraryFileService
 from airesearcher_agent.application.library_lifecycle import LibraryLifecycleService
@@ -27,6 +28,7 @@ class RuntimeServices:
     paper_service: PaperService
     stream_chat: StreamChatUseCase
     knowledge_base_service: KnowledgeBaseService | None = None
+    conversation_service: ConversationService | None = None
 
 
 def build_runtime(settings: Settings | None = None) -> RuntimeServices:
@@ -82,4 +84,5 @@ def build_runtime(settings: Settings | None = None) -> RuntimeServices:
         ),
         stream_chat=StreamChatUseCase(provider),
         knowledge_base_service=KnowledgeBaseService(database),
+        conversation_service=ConversationService(database),
     )

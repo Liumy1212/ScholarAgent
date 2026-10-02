@@ -3,6 +3,7 @@ import type {
   AnswerMode,
   ChatSseEvent,
   CitationCreatedEvent,
+  ConversationTurn,
   ToolStatusEvent,
 } from '../api/types';
 
@@ -20,7 +21,9 @@ export interface ChatFailure {
   retryable: boolean;
 }
 
-export type Citation = CitationCreatedEvent['payload'];
+export type Citation = Omit<CitationCreatedEvent['payload'], 'paperId'> & {
+  paperId: string | null;
+};
 export type ToolProgress = ToolStatusEvent['payload'];
 
 interface StreamProgress {
@@ -62,6 +65,34 @@ export const initialChatState: ChatState = {
   failure: null,
   stream: EMPTY_PROGRESS,
 };
+
+export function restoreCompletedTurn(
+  conversationId: string,
+  turn: ConversationTurn,
+): ChatState {
+  return {
+    status: 'completed',
+    requestId: turn.requestId,
+    conversationId,
+    answer: turn.answer,
+    citations: turn.citations,
+    tools: turn.tools.map((tool) => ({
+      toolCallId: tool.toolCallId,
+      toolName: tool.toolName,
+      status: tool.status.toLowerCase() as ToolProgress['status'],
+      message: tool.errorCode ? `错误码：${tool.errorCode}` : '历史工具调用已完成',
+    })),
+    answerMode: turn.answerMode,
+    failure: null,
+    stream: {
+      started: true,
+      nextSequence: 0,
+      runId: turn.runId,
+      assistantMessageId: turn.assistantMessageId,
+      eventIds: [],
+    },
+  };
+}
 
 function isActive(status: ChatStatus): boolean {
   return status === 'connecting' || status === 'streaming';

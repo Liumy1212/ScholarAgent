@@ -66,6 +66,7 @@ class AgentRunStore:
             session.add(
                 AgentRunRecord(
                     id=prompt.run_id,
+                    request_id=prompt.request_id,
                     conversation_id=prompt.conversation_id,
                     user_message_id=user_message_id,
                     assistant_message_id=prompt.assistant_message_id,

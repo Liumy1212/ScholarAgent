@@ -57,6 +57,67 @@ export type AnswerMode =
   | 'DOCUMENT_LOOKUP'
   | 'MODEL_KNOWLEDGE';
 
+export type ConversationScopeType = 'ALL' | 'KNOWLEDGE_BASE' | 'PAPERS' | 'LEGACY';
+
+export interface ConversationScope {
+  type: ConversationScopeType;
+  scopeId: string | null;
+  paperIds: string[];
+}
+
+export interface ConversationToolCall {
+  toolCallId: string;
+  toolName: ToolName;
+  status: 'STARTED' | 'COMPLETED' | 'FAILED';
+  errorCode: string | null;
+}
+
+export interface ConversationCitation {
+  citationId: string;
+  paperId: string | null;
+  paperTitle: string;
+  pageNumber: number;
+  quote: string;
+  chunkId: string;
+}
+
+export interface ConversationTurn {
+  runId: string;
+  requestId: string | null;
+  assistantMessageId: string;
+  question: string;
+  answer: string;
+  answerMode: AnswerMode;
+  tools: ConversationToolCall[];
+  citations: ConversationCitation[];
+  createdAt: string;
+  completedAt: string;
+}
+
+export interface ConversationSummary {
+  conversationId: string;
+  title: string;
+  preview: string;
+  scope: ConversationScope;
+  turnCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationsPage {
+  items: ConversationSummary[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary;
+  turns: ConversationTurn[];
+  totalTurns: number;
+  truncated: boolean;
+}
+
 export interface RunCompletedEvent extends BaseSseEvent {
   type: 'run.completed';
   payload: {

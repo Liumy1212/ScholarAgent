@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -30,6 +31,7 @@ from airesearcher_agent.persistence.models import (
     PaperRecord,
     utc_now,
 )
+from airesearcher_agent.retrieval.qdrant_store import VectorStoreError
 from airesearcher_agent.worker.service import IngestionWorker
 
 
@@ -134,6 +136,12 @@ class BlockingVectorStore(RecordingVectorStore):
             raise TimeoutError(f"test did not release Qdrant {operation}")
 
 
+class FailingVectorStore(RecordingVectorStore):
+    def delete_paper(self, paper_id: str) -> None:
+        del paper_id
+        raise VectorStoreError("synthetic qdrant detail that must not be logged")
+
+
 def _file_database(path: Path) -> Database:
     database = Database(f"sqlite:///{path.as_posix()}")
     Base.metadata.create_all(database.engine)
@@ -157,6 +165,34 @@ def _pdf_bytes(path: Path) -> bytes:
         "Runtime worker evidence about retrieval, ranking, and grounded citations. " * 8,
         fontsize=11,
     )
+    document.save(path)  # type: ignore[no-untyped-call]
+    document.close()  # type: ignore[no-untyped-call]
+    return path.read_bytes()
+
+
+def _damaged_pdf_bytes(path: Path) -> bytes:
+    content = b"%PDF-1.7\nsynthetic truncated document"
+    path.write_bytes(content)
+    return content
+
+
+def _encrypted_pdf_bytes(path: Path) -> bytes:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    page = document.new_page()
+    page.insert_text((72, 72), "Encrypted synthetic worker content.", fontsize=11)
+    document.save(  # type: ignore[no-untyped-call]
+        path,
+        encryption=pymupdf.PDF_ENCRYPT_AES_256,  # type: ignore[attr-defined]
+        owner_pw="synthetic-owner",
+        user_pw="synthetic-user",
+    )
+    document.close()  # type: ignore[no-untyped-call]
+    return path.read_bytes()
+
+
+def _blank_pdf_bytes(path: Path) -> bytes:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    document.new_page()
     document.save(path)  # type: ignore[no-untyped-call]
     document.close()  # type: ignore[no-untyped-call]
     return path.read_bytes()
@@ -231,6 +267,95 @@ def test_worker_retries_transient_failure_then_marks_paper_ready(tmp_path: Path)
         assert chunk.quote in chunk.text
     worker.close()
     assert context_provider.close_calls == 1
+
+
+def test_worker_maps_qdrant_failure_with_safe_stage_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="airesearcher_agent.worker.service")
+    settings = runtime_settings(tmp_path)
+    database = sqlite_database()
+    vectors = FailingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    uploaded = asyncio.run(
+        service.upload(MemoryUpload(_pdf_bytes(tmp_path / "qdrant.pdf"), filename="qdrant.pdf"))
+    )
+    worker = IngestionWorker(
+        database=database,
+        parser=PdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        context_provider=DeterministicChunkContext(),
+        embedding=DeterministicEmbedding(),
+        vector_store=vectors,
+        settings=settings,
+        worker_id="qdrant-worker",
+    )
+
+    assert worker.run_once() is True
+
+    failed = service.get_job(uploaded.ingestion_job.job_id)
+    assert failed.status is IngestionJobStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.code == "QDRANT_UNAVAILABLE"
+    assert failed.failure.retryable is True
+    assert service.get_paper(uploaded.paper.paper_id).status is PaperStatus.FAILED
+    assert vectors.upserts == []
+    assert "ingestion_job status=failed stage=INDEXING" in caplog.text
+    assert f"job_id={failed.job_id}" in caplog.text
+    assert f"paper_id={uploaded.paper.paper_id}" in caplog.text
+    assert "worker_id=qdrant-worker" in caplog.text
+    assert "error_code=QDRANT_UNAVAILABLE retryable=true" in caplog.text
+    assert "synthetic qdrant detail" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("fixture_factory", "expected_code"),
+    [
+        (_damaged_pdf_bytes, "INVALID_PDF"),
+        (_encrypted_pdf_bytes, "ENCRYPTED_PDF"),
+        (_blank_pdf_bytes, "PDF_HAS_NO_TEXT"),
+    ],
+)
+def test_worker_keeps_invalid_pdf_failures_non_retryable_and_unpublished(
+    tmp_path: Path,
+    fixture_factory: Callable[[Path], bytes],
+    expected_code: str,
+) -> None:
+    settings = runtime_settings(tmp_path)
+    database = sqlite_database()
+    vectors = RecordingVectorStore()
+    service = PaperService(database=database, settings=settings, vector_store=vectors)
+    uploaded = asyncio.run(
+        service.upload(
+            MemoryUpload(
+                fixture_factory(tmp_path / f"{expected_code}.pdf"),
+                filename=f"{expected_code}.pdf",
+            )
+        )
+    )
+    worker = IngestionWorker(
+        database=database,
+        parser=PdfParser(max_pages=500, chunk_size=1200, chunk_overlap=160),
+        context_provider=DeterministicChunkContext(),
+        embedding=DeterministicEmbedding(),
+        vector_store=vectors,
+        settings=settings,
+        worker_id=f"invalid-pdf-{expected_code}",
+    )
+
+    assert worker.run_once() is True
+
+    failed = service.get_job(uploaded.ingestion_job.job_id)
+    assert failed.status is IngestionJobStatus.FAILED
+    assert failed.stage is IngestionStage.FAILED
+    assert failed.failure is not None
+    assert failed.failure.code == expected_code
+    assert failed.failure.retryable is False
+    assert failed.can_retry is False
+    assert service.get_paper(uploaded.paper.paper_id).status is PaperStatus.FAILED
+    assert vectors.upserts == []
+    with database.session() as session:
+        assert session.query(ChunkRecord).count() == 0
 
 
 def test_worker_recovers_an_expired_database_lease(tmp_path: Path) -> None:

@@ -87,7 +87,9 @@ class PdfParser:
 
     def parse(self, *, paper_id: str, path: Path) -> ParsedDocument:
         try:
-            document = pymupdf.open(path)  # type: ignore[no-untyped-call]
+            return self._parse_document(paper_id=paper_id, path=path)
+        except IngestionError:
+            raise
         except Exception as error:
             raise IngestionError(
                 code="INVALID_PDF",
@@ -95,6 +97,8 @@ class PdfParser:
                 retryable=False,
             ) from error
 
+    def _parse_document(self, *, paper_id: str, path: Path) -> ParsedDocument:
+        document = pymupdf.open(path)  # type: ignore[no-untyped-call]
         with document:
             if document.needs_pass:
                 raise IngestionError(

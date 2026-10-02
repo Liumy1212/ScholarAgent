@@ -214,6 +214,7 @@ class IngestionWorker:
             return ClaimedJob(job_id=job.id, paper_id=job.paper_id, worker_id=self._worker_id)
 
     def _process(self, claimed: ClaimedJob) -> None:
+        stage = IngestionStage.PARSING
         heartbeat = _LeaseHeartbeat(
             renew=lambda: self._renew_claim(claimed),
             interval_seconds=_heartbeat_interval_seconds(self._lease_seconds),
@@ -228,18 +229,21 @@ class IngestionWorker:
                 self._checkpoint(claimed, heartbeat)
                 self._verify_source(source)
                 self._set_stage(claimed, IngestionStage.CHUNKING)
+                stage = IngestionStage.CHUNKING
                 parsed = self._prepare_chunks(claimed, parsed)
                 parsed = self._contextualize(claimed, parsed)
                 self._checkpoint(claimed, heartbeat)
                 self._verify_source(source)
                 self._store_chunks(claimed, parsed)
                 self._set_stage(claimed, IngestionStage.EMBEDDING)
+                stage = IngestionStage.EMBEDDING
                 self._checkpoint(claimed, heartbeat)
                 vectors = self._embedding.encode([chunk.text for chunk in parsed.chunks])
                 self._checkpoint(claimed, heartbeat)
                 if len(vectors) != len(parsed.chunks):
                     raise RuntimeError("embedding provider returned an unexpected vector count")
                 self._set_stage(claimed, IngestionStage.INDEXING)
+                stage = IngestionStage.INDEXING
                 self._verify_source(source)
                 self._checkpoint(claimed, heartbeat)
                 self._vector_store.delete_paper(claimed.paper_id)
@@ -259,12 +263,32 @@ class IngestionWorker:
                 heartbeat.stop()
             heartbeat.raise_if_failed()
             self._complete(claimed)
+            self._log_job(claimed, status="completed", stage=IngestionStage.COMPLETED)
         except LeaseLostError:
-            logger.warning("Worker lease was lost for ingestion job %s", claimed.job_id)
+            self._log_job(
+                claimed,
+                status="lease_lost",
+                stage=stage,
+                error_code="WORKER_LEASE_LOST",
+                retryable=True,
+            )
         except IngestionError as error:
+            self._log_job(
+                claimed,
+                status="failed",
+                stage=stage,
+                error_code=error.code,
+                retryable=error.retryable,
+            )
             self._fail(claimed, code=error.code, message=error.message, retryable=error.retryable)
         except VectorStoreError:
-            logger.exception("Qdrant failed for ingestion job %s", claimed.job_id)
+            self._log_job(
+                claimed,
+                status="failed",
+                stage=stage,
+                error_code="QDRANT_UNAVAILABLE",
+                retryable=True,
+            )
             self._fail(
                 claimed,
                 code="QDRANT_UNAVAILABLE",
@@ -272,7 +296,13 @@ class IngestionWorker:
                 retryable=True,
             )
         except SQLAlchemyError:
-            logger.exception("Database failed for ingestion job %s", claimed.job_id)
+            self._log_job(
+                claimed,
+                status="failed",
+                stage=stage,
+                error_code="DATABASE_UNAVAILABLE",
+                retryable=True,
+            )
             self._fail(
                 claimed,
                 code="DATABASE_UNAVAILABLE",
@@ -280,13 +310,41 @@ class IngestionWorker:
                 retryable=True,
             )
         except Exception:
-            logger.exception("Model or worker failed for ingestion job %s", claimed.job_id)
+            self._log_job(
+                claimed,
+                status="failed",
+                stage=stage,
+                error_code="INGESTION_RUNTIME_FAILED",
+                retryable=True,
+            )
             self._fail(
                 claimed,
                 code="INGESTION_RUNTIME_FAILED",
                 message="解析或本地模型执行失败，入库可以重试。",
                 retryable=True,
             )
+
+    @staticmethod
+    def _log_job(
+        claimed: ClaimedJob,
+        *,
+        status: str,
+        stage: IngestionStage,
+        error_code: str | None = None,
+        retryable: bool | None = None,
+    ) -> None:
+        log = logger.info if status == "completed" else logger.warning
+        log(
+            "ingestion_job status=%s stage=%s job_id=%s paper_id=%s worker_id=%s "
+            "error_code=%s retryable=%s",
+            status,
+            stage.value,
+            claimed.job_id,
+            claimed.paper_id,
+            claimed.worker_id,
+            error_code or "none",
+            "none" if retryable is None else str(retryable).lower(),
+        )
 
     def _paper_source(self, claimed: ClaimedJob) -> IngestionSource:
         with self._database.session() as session:
@@ -592,7 +650,13 @@ class IngestionWorker:
                 paper.status = PaperStatus.FAILED.value
                 paper.updated_at = now
         except SQLAlchemyError:
-            logger.exception("Could not persist failure for ingestion job %s", claimed.job_id)
+            logger.error(
+                "ingestion_job status=failure_persistence_failed job_id=%s paper_id=%s "
+                "worker_id=%s",
+                claimed.job_id,
+                claimed.paper_id,
+                claimed.worker_id,
+            )
 
     def _locked_records(
         self,

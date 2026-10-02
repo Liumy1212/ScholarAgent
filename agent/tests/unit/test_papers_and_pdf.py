@@ -100,6 +100,19 @@ def _write_blank_pdf(path: Path) -> None:
     document.close()  # type: ignore[no-untyped-call]
 
 
+def _write_encrypted_pdf(path: Path) -> None:
+    document = pymupdf.open()  # type: ignore[no-untyped-call]
+    page = document.new_page()
+    page.insert_text((72, 72), "Encrypted synthetic content.", fontsize=11)
+    document.save(  # type: ignore[no-untyped-call]
+        path,
+        encryption=pymupdf.PDF_ENCRYPT_AES_256,  # type: ignore[attr-defined]
+        owner_pw="synthetic-owner",
+        user_pw="synthetic-user",
+    )
+    document.close()  # type: ignore[no-untyped-call]
+
+
 def _write_structured_pdf(path: Path) -> None:
     document = pymupdf.open()  # type: ignore[no-untyped-call]
     page = document.new_page()
@@ -502,6 +515,73 @@ def test_parser_rejects_pdf_without_extractable_text(tmp_path: Path) -> None:
         )
 
     assert captured.value.code == "PDF_HAS_NO_TEXT"
+
+
+def test_parser_rejects_damaged_pdf(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "damaged.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nsynthetic truncated document")
+
+    with pytest.raises(IngestionError) as captured:
+        PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20).parse(
+            paper_id="paper-damaged",
+            path=pdf_path,
+        )
+
+    assert captured.value.code == "INVALID_PDF"
+    assert captured.value.retryable is False
+
+
+def test_parser_rejects_encrypted_pdf(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "encrypted.pdf"
+    _write_encrypted_pdf(pdf_path)
+
+    with pytest.raises(IngestionError) as captured:
+        PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20).parse(
+            paper_id="paper-encrypted",
+            path=pdf_path,
+        )
+
+    assert captured.value.code == "ENCRYPTED_PDF"
+    assert captured.value.retryable is False
+
+
+def test_parser_normalizes_page_read_failure_as_invalid_pdf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenPage:
+        def get_text(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise RuntimeError("synthetic damaged page")
+
+    class BrokenDocument:
+        needs_pass = False
+        page_count = 1
+
+        def __init__(self) -> None:
+            self.metadata: dict[str, str] = {}
+
+        def __enter__(self) -> "BrokenDocument":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def __getitem__(self, _index: int) -> BrokenPage:
+            return BrokenPage()
+
+    def broken_open(_path: Path) -> BrokenDocument:
+        return BrokenDocument()
+
+    monkeypatch.setattr(pymupdf, "open", broken_open)
+
+    with pytest.raises(IngestionError) as captured:
+        PdfParser(max_pages=500, chunk_size=200, chunk_overlap=20).parse(
+            paper_id="paper-page-damaged",
+            path=tmp_path / "damaged-page.pdf",
+        )
+
+    assert captured.value.code == "INVALID_PDF"
+    assert captured.value.retryable is False
 
 
 def test_parser_preserves_heading_hierarchy_without_putting_headings_in_quotes(

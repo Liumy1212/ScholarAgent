@@ -5,7 +5,7 @@ AIResearcher 的 Python Agent API、PDF 入库 Worker、检索、Rerank 和 Deep
 
 当前运行时使用 `AIRESEARCHER_PAPER_LIBRARY_DIR` 管理 PDF 原件，支持只登记上传、分页
 清单与 `libraryState` 筛选、后台扫描、逐篇手动入库、只删除知识并保留 PDF 原件、
-排除/恢复、可持久化逻辑知识库与成员关系、三类问答范围快照、MySQL 持久任务、
+排除/恢复、可持久化逻辑知识库与成员关系、三类问答范围快照、成功会话列表与历史恢复、MySQL 持久任务、
 PyMuPDF 章节感知页内切块、DeepSeek 逐 Chunk 上下文化、
 BGE-M3/Qdrant 与按论文版本缓存倒排索引的 BM25 双路召回、RRF 融合、本地 reranker、原生 Tool Calling、SSE 和引用校验。生成的
 上下文只进入检索文本，引用 quote 始终保留论文原文。扫描会清理没有知识关联的缺失或替换登记，并保留仍
@@ -14,13 +14,20 @@ BGE-M3/Qdrant 与按论文版本缓存倒排索引的 BM25 双路召回、RRF �
 
 PDF 直接存放在配置的论文目录中，网页上传与手动放入使用同一位置；仅 `.staging/` 用于
 上传暂存。扫描递归覆盖任意子目录，但文件夹没有知识库语义，也不会因创建知识库而移动原件。
+Worker 将损坏、加密和无可提取文本的 PDF 分别记录为稳定的不可重试失败；原件与失败任务
+保留用于定位，但不会发布 chunk 或向量。
+
+Agent 的运行日志使用不含正文的关联字段：问答链路记录 `request_id`、`run_id`、
+`conversation_id`、阶段、工具调用 ID、工具名和稳定错误码；入库链路记录 `job_id`、
+`paper_id`、`worker_id`、阶段和稳定错误码。日志不写入问题正文、论文内容、工具参数、模型
+输出或底层依赖异常详情。
 
 ## 目录结构
 
 | 路径 | 职责 |
 | --- | --- |
 | `src/airesearcher_agent/api/` | FastAPI 路由、DTO、PDF 与 SSE 适配 |
-| `src/airesearcher_agent/application/` | 入库、论文和流式 Run 用例 |
+| `src/airesearcher_agent/application/` | 入库、论文、会话查询和流式 Run 用例 |
 | `src/airesearcher_agent/domain/` | 论文、问答和 SSE 领域模型 |
 | `src/airesearcher_agent/ingestion/` | PDF 结构解析、页内切块与检索上下文模型 |
 | `src/airesearcher_agent/persistence/` | SQLAlchemy 模型、数据库和仓储 |

@@ -8,6 +8,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `start-dev.ps1` | Windows 环境检查、一键启动基础设施和四个应用 |
+| `check-phase-1-5.ps1` | 不读取私有数据或真实凭据的阶段 1.5 本地全量回归 |
 | `generate_demo_pdf.py` | 在仓库外生成带章节结构及页级检索真值的两页中英文冒烟 PDF |
 
 ### 启动
@@ -23,6 +24,19 @@
 Worker、Java BFF 和 React，避免 Agent 冷启动期间页面误报服务不可用。
 完整环境、首次部署、再次运行、停止和手动启动见
 [Windows 本地部署与运行](../docs/deployment.md)。
+
+### 阶段 1.5 本地回归
+
+```powershell
+.\scripts\check-phase-1-5.ps1
+```
+
+脚本依次运行 Contracts 校验、Agent Ruff/format/Mypy/Pytest、Backend `verify`、Frontend
+lint/typecheck/test/production build 和 `git diff --check`。它不加载 `.env`，不连接真实
+MySQL、Qdrant 或模型服务，也不读取论文目录；Frontend 构建产物写入被忽略的
+`.private/checks/phase-1-5/`，Backend 的 Maven 依赖也缓存到该目录，Backend 构建产物仍按
+模块惯例写入 `backend/target/`。Agent 的 Ruff 使用无缓存模式，Mypy 缓存也写入检查目录，
+不会依赖模块目录中历史缓存的权限状态。
 
 ### 生成合成 PDF
 

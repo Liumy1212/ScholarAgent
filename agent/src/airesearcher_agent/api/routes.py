@@ -6,6 +6,8 @@ from starlette.datastructures import UploadFile
 
 from airesearcher_agent.api.models import (
     ChatStreamRequest,
+    ConversationDetailResponse,
+    ConversationsPageResponse,
     DeleteKnowledgeBaseResponse,
     DeletePaperResponse,
     IngestionJobResponse,
@@ -27,6 +29,7 @@ from airesearcher_agent.api.models import (
 )
 from airesearcher_agent.api.pdf import pdf_file_response
 from airesearcher_agent.api.sse import ChatStreamingResponse, encode_sse
+from airesearcher_agent.application.conversations import ConversationService
 from airesearcher_agent.application.errors import AgentError, ErrorDetail
 from airesearcher_agent.application.knowledge_bases import KnowledgeBaseService
 from airesearcher_agent.application.library_files import LibraryFileService
@@ -79,6 +82,7 @@ def create_agent_router(
     library_lifecycle_service: LibraryLifecycleService,
     library_scan_service: LibraryScanService,
     knowledge_base_service: KnowledgeBaseService,
+    conversation_service: ConversationService,
     *,
     resolve_chat_scopes: bool = True,
 ) -> APIRouter:
@@ -378,6 +382,30 @@ def create_agent_router(
         result = paper_service.retry_job(job_id)
         response.headers["X-Request-Id"] = request_id
         return IngestionJobResponse.model_validate(result)
+
+    @router.get("/conversations", response_model=ConversationsPageResponse)
+    def list_conversations(
+        response: Response,
+        request_id: RequestIdHeader,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> ConversationsPageResponse:
+        result = conversation_service.list_conversations(offset=offset, limit=limit)
+        response.headers["X-Request-Id"] = request_id
+        return ConversationsPageResponse.model_validate(result)
+
+    @router.get("/conversations/{conversationId}", response_model=ConversationDetailResponse)
+    def get_conversation(
+        conversation_id: Annotated[
+            str,
+            Path(alias="conversationId", min_length=1, max_length=128),
+        ],
+        response: Response,
+        request_id: RequestIdHeader,
+    ) -> ConversationDetailResponse:
+        result = conversation_service.get_conversation(conversation_id)
+        response.headers["X-Request-Id"] = request_id
+        return ConversationDetailResponse.model_validate(result)
 
     @router.post(
         "/conversations/{conversationId}/messages/stream",
